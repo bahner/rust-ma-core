@@ -14,5 +14,7 @@ pub use ipfs_publish::{
 #[cfg(not(target_arch = "wasm32"))]
 pub use ipfs_publish::{handle_ipfs_publish, publish_did_document_to_kubo};
 #[cfg(not(target_arch = "wasm32"))]
+pub use ipfs_publish::KuboDidPublisher;
+#[cfg(not(target_arch = "wasm32"))]
 pub use kubo::KuboKey;
 pub use pinning::{PinUpdateOutcome, pin_update_add_rm};
