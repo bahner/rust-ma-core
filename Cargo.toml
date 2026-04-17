@@ -21,7 +21,7 @@ async-trait = "0.1"
 base64 = "0.22"
 blake3 = "1"
 bytes = "1.11.1"
-did-ma = { package = "ma-did", version = "0.3" }
+did-ma = { package = "ma-did", version = "0.4" }
 iroh = { version = "0.97.0" }
 iroh-gossip = { version = "0.97.0" }
 rand = "0.8"
