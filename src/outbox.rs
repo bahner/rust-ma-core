@@ -3,17 +3,21 @@
 //! An `Outbox` wraps the transport details and exposes only
 //! `send()` + `close()`. Created via [`crate::iroh::IrohEndpoint::outbox`].
 //!
+//! `send()` takes a [`Message`], validates it,
+//! serializes to CBOR, and transmits. Malformed or expired messages
+//! are rejected before anything hits the wire.
+//!
 //! Requires the `iroh` feature.
 //!
 //! ```ignore
-//! let mut outbox = ep.outbox("did:ma:456", b"ma/presence/0.0.1").await?;
-//! outbox.send(event_bytes).await?;
-//! outbox.send(event_bytes).await?;
+//! let mut outbox = ep.outbox("did:ma:456", "ma/presence/0.0.1").await?;
+//! outbox.send(&message).await?;
 //! outbox.close();
 //! ```
 
 use crate::error::Result;
 use crate::iroh::channel::Channel;
+use did_ma::Message;
 
 /// A transport-agnostic write handle to a remote service.
 ///
@@ -40,10 +44,14 @@ impl Outbox {
         }
     }
 
-    /// Send a payload to the remote service.
-    pub async fn send(&mut self, payload: &[u8]) -> Result<()> {
+    /// Send a ma message to the remote service.
+    ///
+    /// Validates the message headers, serializes to CBOR, and transmits.
+    pub async fn send(&mut self, message: &Message) -> Result<()> {
+        message.headers().validate()?;
+        let cbor = message.to_cbor()?;
         match &mut self.inner {
-            OutboxTransport::Channel(channel) => channel.send(payload).await,
+            OutboxTransport::Channel(channel) => channel.send(&cbor).await,
         }
     }
 

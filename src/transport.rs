@@ -37,14 +37,14 @@ pub fn endpoint_id_from_transport(input: &str) -> Option<String> {
 
 /// Parse a transport string and extract the protocol (service identifier).
 ///
-/// For `/iroh/<endpoint-id>/ma/inbox/0.0.1` returns `Some("ma/inbox/0.0.1")`.
+/// For `/iroh/<endpoint-id>/ma/inbox/0.0.1` returns `Some("/ma/inbox/0.0.1")`.
 pub fn protocol_from_transport(input: &str) -> Option<String> {
     let value = input.trim();
     for prefix in ["/ma-iroh/", "/iroh+ma/", "/iroh/"] {
         if let Some(rest) = value.strip_prefix(prefix) {
             // Skip the endpoint-id segment
             if let Some(after_id) = rest.find('/') {
-                let protocol = &rest[after_id + 1..];
+                let protocol = &rest[after_id..];
                 if !protocol.is_empty() {
                     return Some(protocol.to_string());
                 }
@@ -119,9 +119,9 @@ pub fn normalize_endpoint_id(address: &str) -> Option<String> {
 
 /// Build a transport string from an endpoint ID and protocol.
 ///
-/// Returns `/iroh/<endpoint-id>/<protocol>`.
+/// Returns `/iroh/<endpoint-id><protocol>` where protocol starts with `/`.
 pub fn transport_string(endpoint_id: &str, protocol: &str) -> String {
-    format!("/iroh/{}/{}", endpoint_id, protocol)
+    format!("/iroh/{}{}", endpoint_id, protocol)
 }
 
 #[cfg(test)]
@@ -154,13 +154,13 @@ mod tests {
     fn parse_protocol_from_transport() {
         let input =
             "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
-        assert_eq!(protocol_from_transport(input).unwrap(), "ma/inbox/0.0.1");
+        assert_eq!(protocol_from_transport(input).unwrap(), "/ma/inbox/0.0.1");
     }
 
     #[test]
     fn parse_protocol_from_legacy_transport() {
         let input = "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/presence/0.0.1";
-        assert_eq!(protocol_from_transport(input).unwrap(), "ma/presence/0.0.1");
+        assert_eq!(protocol_from_transport(input).unwrap(), "/ma/presence/0.0.1");
     }
 
     #[test]
@@ -218,7 +218,7 @@ mod tests {
             "/iroh/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/ma/inbox/0.0.1",
             "/iroh/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ma/presence/0.0.1"
         ]);
-        let id = resolve_endpoint_for_protocol(Some(&services), "ma/presence/0.0.1").unwrap();
+        let id = resolve_endpoint_for_protocol(Some(&services), "/ma/presence/0.0.1").unwrap();
         assert_eq!(
             id,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -229,7 +229,7 @@ mod tests {
     fn transport_string_format() {
         let s = transport_string(
             "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
-            "ma/inbox/0.0.1",
+            "/ma/inbox/0.0.1",
         );
         assert_eq!(
             s,

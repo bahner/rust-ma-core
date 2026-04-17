@@ -6,10 +6,10 @@
 //!
 //! - **DID documents** — create, validate, resolve, and publish `did:ma:` documents
 //!   to IPFS/IPNS (via Kubo or custom backends).
-//! - **Service inboxes** — bounded, TTL-aware FIFO queues ([`Inbox`] / [`TtlQueue`])
-//!   for receiving messages on named protocol services.
-//! - **Outbox sending** — fire-and-forget delivery to remote endpoints on any
-//!   registered protocol ([`Outbox`]).
+//! - **Service inboxes** — bounded, TTL-aware FIFO queues ([`Inbox`])
+//!   for receiving validated messages on named protocol services.
+//! - **Outbox sending** — fire-and-forget delivery of validated [`Message`] objects
+//!   to remote endpoints, serialized to CBOR on the wire ([`Outbox`]).
 //! - **Endpoint abstraction** — the [`MaEndpoint`] trait with an iroh-backed
 //!   implementation ([`IrohEndpoint`], behind the `iroh` feature).
 //! - **Transport parsing** — extract endpoint IDs and protocols from DID document
@@ -30,7 +30,7 @@
 //!
 //! ## Platform support
 //!
-//! Core types (`Inbox`, `TtlQueue`, `Service`, transport parsing, validation)
+//! Core types (`Inbox`, `Service`, transport parsing, validation)
 //! compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
 //! resolution, and iroh require a native target.
 
@@ -42,15 +42,18 @@ pub mod identity;
 pub mod inbox;
 pub mod interfaces;
 pub mod ipfs_publish;
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gossip;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod iroh;
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub mod outbox;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod resolve;
 pub mod service;
+pub mod topic;
 pub mod transport;
-pub mod ttl_queue;
+pub(crate) mod ttl_queue;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub mod kubo;
@@ -71,28 +74,41 @@ pub use error::{Error, Result};
 // ─── Re-export service constants ────────────────────────────────────────────
 
 pub use service::{
-    Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST, CONTENT_TYPE_CHAT,
-    CONTENT_TYPE_EVENT, CONTENT_TYPE_MESSAGE, CONTENT_TYPE_PRESENCE, CONTENT_TYPE_WHISPER,
-    CONTENT_TYPE_WORLD, DEFAULT_CONTENT_TYPE, INBOX_PROTOCOL, IPFS_PROTOCOL,
+    Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST,
+    CONTENT_TYPE_DOC, CONTENT_TYPE_IPFS_REQUEST, CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL, IPFS_PROTOCOL,
 };
-
-// ─── Re-export TtlQueue ─────────────────────────────────────────────────────
-
-pub use ttl_queue::TtlQueue;
 
 // ─── Re-export Inbox ────────────────────────────────────────────────────────
 
 pub use inbox::Inbox;
 
+// ─── Re-export Topic ────────────────────────────────────────────────────────
+
+pub use topic::{Topic, TopicId, topic_id};
+
 // ─── Re-export endpoint trait and implementations ───────────────────────────
 
 pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use iroh::channel::Channel;
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use iroh::IrohEndpoint;
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+#[cfg(not(target_arch = "wasm32"))]
 pub use outbox::Outbox;
+
+// ─── Re-export iroh primitives so dependents don't need a direct iroh dep ───
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use ::iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
+#[cfg(not(target_arch = "wasm32"))]
+pub use ::iroh::endpoint::{Connection, RecvStream, SendStream, presets};
+#[cfg(not(target_arch = "wasm32"))]
+pub use ::iroh::protocol::{AcceptError, ProtocolHandler, Router};
+
+// ─── Re-export gossip helpers ────────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use gossip::{broadcast_topic_id, gossip_send, gossip_send_text, join_broadcast_channel, join_gossip_topic, topic_id_for};
 
 // ─── Re-export transport parsing ────────────────────────────────────────────
 
@@ -120,7 +136,7 @@ pub use ipfs_publish::KuboDidPublisher;
 pub use ipfs_publish::{handle_ipfs_publish, publish_did_document_to_kubo};
 pub use ipfs_publish::{
     validate_ipfs_publish_request, IpfsPublishDidRequest, IpfsPublishDidResponse,
-    ValidatedIpfsPublish, CONTENT_TYPE_DOC,
+    ValidatedIpfsPublish,
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub use kubo::KuboKey;

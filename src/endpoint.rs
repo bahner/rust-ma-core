@@ -7,15 +7,13 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::inbox::Inbox;
+use did_ma::Message;
 
 /// Default inbox capacity for services.
 pub const DEFAULT_INBOX_CAPACITY: usize = 256;
 
-/// Default inbox TTL in seconds (5 minutes).
-pub const DEFAULT_INBOX_TTL_SECS: u64 = 300;
-
 /// Default protocol ID for unqualified send/request calls.
-pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = "ma/inbox/0.0.1";
+pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = "/ma/inbox/0.0.1";
 
 /// Shared interface for ma transport endpoints.
 ///
@@ -27,7 +25,7 @@ pub trait MaEndpoint: Send + Sync {
     fn id(&self) -> String;
 
     /// Register a service protocol and return an [`Inbox`] for receiving messages.
-    fn service(&mut self, protocol: &str) -> Inbox<Vec<u8>>;
+    fn service(&mut self, protocol: &str) -> Inbox<Message>;
 
     /// Return service strings for all registered protocols.
     ///
@@ -45,11 +43,11 @@ pub trait MaEndpoint: Send + Sync {
     }
 
     /// Fire-and-forget to a target on a specific protocol.
-    async fn send_to(&self, target: &str, protocol: &str, payload: &[u8]) -> Result<()>;
+    async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()>;
 
     /// Fire-and-forget to a target on the default inbox protocol.
-    async fn send(&self, target: &str, payload: &[u8]) -> Result<()> {
-        self.send_to(target, DEFAULT_DELIVERY_PROTOCOL_ID, payload)
+    async fn send(&self, target: &str, message: &Message) -> Result<()> {
+        self.send_to(target, DEFAULT_DELIVERY_PROTOCOL_ID, message)
             .await
     }
 }

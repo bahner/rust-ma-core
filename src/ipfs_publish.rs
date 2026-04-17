@@ -16,19 +16,19 @@ use base64::Engine;
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};
+use crate::kubo::{
+    dag_put, import_key, name_publish_with_retry, IpnsPublishOptions,
+};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
-pub const CONTENT_TYPE_DOC: &str = "application/x-ma-doc";
+use crate::service::CONTENT_TYPE_IPFS_REQUEST;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct IpfsPublishDidRequest {
     pub did_document_json: String,
     #[serde(default)]
     pub ipns_private_key_base64: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub desired_fragment: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -37,8 +37,6 @@ pub struct IpfsPublishDidResponse {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub did: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub key_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cid: Option<String>,
 }
@@ -77,13 +75,11 @@ impl KuboDidPublisher {
         &self,
         did_document_json: &str,
         ipns_private_key_base64: &str,
-        desired_fragment: Option<&str>,
-    ) -> Result<(Option<String>, Option<String>)> {
+    ) -> Result<Option<String>> {
         publish_did_document_to_kubo(
             &self.kubo_url,
             did_document_json,
             ipns_private_key_base64,
-            desired_fragment,
         )
         .await
     }
@@ -145,10 +141,10 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     let message =
         Message::from_cbor(message_cbor).map_err(|e| anyhow!("invalid signed message: {}", e))?;
 
-    if message.content_type != CONTENT_TYPE_DOC {
+    if message.content_type != CONTENT_TYPE_IPFS_REQUEST {
         return Err(anyhow!(
             "expected {} on ma/ipfs/1, got {}",
-            CONTENT_TYPE_DOC,
+            CONTENT_TYPE_IPFS_REQUEST,
             message.content_type
         ));
     }
@@ -195,62 +191,34 @@ pub async fn publish_did_document_to_kubo(
     kubo_url: &str,
     did_document_json: &str,
     ipns_private_key_base64: &str,
-    desired_fragment: Option<&str>,
-) -> Result<(Option<String>, Option<String>)> {
+) -> Result<Option<String>> {
     let document = Document::unmarshal(did_document_json)
         .map_err(|e| anyhow!("invalid DID document JSON: {}", e))?;
     let document_did = Did::try_from(document.id.as_str())
         .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
     let document_ipns_id = document_did.ipns.clone();
 
-    let keys = list_keys(kubo_url).await?;
-
-    let desired = desired_fragment
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or(document_did.fragment.clone());
-
-    let mut key_name: Option<String> = None;
-
-    if let Some(alias) = desired {
-        if let Some(existing) = keys.iter().find(|key| key.name == alias) {
-            if existing.id.trim() != document_ipns_id {
-                return Err(anyhow!(
-                    "fragment '{}' exists already with another key id",
-                    alias
-                ));
-            }
-            key_name = Some(alias);
-        } else if !ipns_private_key_base64.trim().is_empty() {
-            let key_bytes = B64
-                .decode(ipns_private_key_base64.trim())
-                .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?;
-            let imported = import_key(kubo_url, &alias, key_bytes).await?;
-            if imported.id.trim() != document_ipns_id {
-                return Err(anyhow!(
-                    "imported key id '{}' does not match document ipns '{}'",
-                    imported.id,
-                    document_ipns_id
-                ));
-            }
-            key_name = Some(alias);
-        }
+    if ipns_private_key_base64.trim().is_empty() {
+        return Err(anyhow!("ipns_private_key_base64 is required"));
     }
 
-    if key_name.is_none() {
-        key_name = keys
-            .iter()
-            .find(|key| key.id.trim() == document_ipns_id)
-            .map(|key| key.name.clone());
-    }
+    let key_bytes = B64
+        .decode(ipns_private_key_base64.trim())
+        .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?;
 
-    let Some(key_name) = key_name else {
+    // Deterministic key name derived from the DID IPNS identity.
+    // Same DID always maps to the same Kubo key name — idempotent, no cleanup needed.
+    let hash = blake3::hash(document_ipns_id.as_bytes());
+    let key_name = format!("_ma_{}", &hash.to_hex()[..16]);
+
+    let imported = import_key(kubo_url, &key_name, key_bytes).await?;
+    if imported.id.trim() != document_ipns_id {
         return Err(anyhow!(
-            "no matching Kubo key for DID ipns '{}' and no importable private key provided",
+            "imported key IPNS id '{}' does not match document DID IPNS '{}'",
+            imported.id,
             document_ipns_id
         ));
-    };
+    }
 
     let document_cid = dag_put(kubo_url, &document).await?;
     let ipns_options = IpnsPublishOptions::default();
@@ -264,7 +232,7 @@ pub async fn publish_did_document_to_kubo(
     )
     .await?;
 
-    Ok((Some(key_name), Some(document_cid)))
+    Ok(Some(document_cid))
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -274,19 +242,17 @@ pub async fn handle_ipfs_publish(
 ) -> Result<IpfsPublishDidResponse> {
     let validated = validate_ipfs_publish_request(message_cbor)?;
 
-    let (key_name, cid) = publish_did_document_to_kubo(
+    let cid = publish_did_document_to_kubo(
         kubo_url,
         &validated.request.did_document_json,
         &validated.request.ipns_private_key_base64,
-        validated.request.desired_fragment.as_deref(),
     )
     .await?;
 
     Ok(IpfsPublishDidResponse {
         ok: true,
-        message: "did document published via ma/ipfs/1".to_string(),
+        message: "did document published via ma/ipfs/0.0.1".to_string(),
         did: Some(validated.document_did.id()),
-        key_name,
         cid,
     })
 }

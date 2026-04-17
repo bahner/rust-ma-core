@@ -705,6 +705,23 @@ pub async fn list_key_names(kubo_url: &str) -> Result<Vec<String>> {
     Ok(keys.into_iter().map(|k| k.name).collect())
 }
 
+/// Remove a named key from the Kubo keystore.
+pub async fn remove_key(kubo_url: &str, key_name: &str) -> Result<()> {
+    let base = kubo_url.trim_end_matches('/');
+    let url = format!("{base}/api/v0/key/rm");
+
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?
+        .post(url)
+        .query(&[("arg", key_name)])
+        .send()
+        .await?
+        .error_for_status()?;
+
+    Ok(())
+}
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

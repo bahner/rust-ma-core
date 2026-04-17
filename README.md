@@ -10,12 +10,12 @@ to any specific runtime or application.
 
 ### Messaging primitives
 
-- **`TtlQueue`** — bounded FIFO queue with per-item TTL and lazy eviction.
-  Wasm-compatible (caller supplies `now`).
-- **`Inbox`** — a `TtlQueue` wrapper with a configurable default TTL for
-  service receive queues.
-- **`Outbox`** — transport-agnostic write handle for fire-and-forget delivery
-  to a remote service.
+- **`Inbox`** — bounded, TTL-aware FIFO receive queue for service endpoints.
+  Per-message TTL is computed from each message's `created_at + ttl`. Only
+  endpoint implementations push to an inbox; consumers read via
+  `pop`/`peek`/`drain`.
+- **`Outbox`** — transport-agnostic write handle for fire-and-forget delivery.
+  Takes a `Message`, validates, serializes to CBOR, and transmits.
 
 ### Service model
 
@@ -31,7 +31,7 @@ provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
 ### DID document publishing
 
 - **`validate_ipfs_publish_request`** — decodes a signed CBOR message,
-  enforces `application/x-ma-doc` content type, validates the document,
+  enforces `application/x-ma-ipfs-request` content type, validates the document,
   verifies sender matches IPNS identity.
 - **`KuboDidPublisher`** (non-WASM, `kubo` feature) — publishes validated
   documents to IPFS via Kubo RPC.
@@ -75,23 +75,22 @@ IPNS publish/resolve, key management, pinning.
 
 ## Platform support
 
-Core types (`Inbox`, `TtlQueue`, `Service`, transport parsing, validation)
+Core types (`Inbox`, `Service`, transport parsing, validation)
 compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
 resolution, and iroh require a native target.
 
 ## Quick usage
 
-```rust
-use ma_core::{Inbox, INBOX_PROTOCOL};
+Consumers receive validated `Message` objects from an `Inbox` — the endpoint
+handles deserialization and validation before messages enter the queue:
 
-// Create an inbox with capacity 256 and 5-minute default TTL
-let mut inbox: Inbox<Vec<u8>> = Inbox::new(256, 300);
+```rust,ignore
+// Endpoint gives you an Inbox<Message> when you register a service
+let mut inbox = endpoint.service("ma/inbox/0.0.1");
 
-let now = 1_000_000;
-inbox.push(now, b"hello".to_vec());
-
-if let Some(msg) = inbox.pop(now) {
-    println!("got {} bytes", msg.len());
+let now = current_time_secs();
+while let Some(msg) = inbox.pop(now) {
+    println!("from={} type={}", msg.from, msg.message_type);
 }
 ```
 
@@ -116,7 +115,7 @@ This section shows a concrete non-WASM flow for publishing a DID document throug
 - Kubo API is reachable at whichever base URL your environment uses.
 - Create a publisher once with that URL and reuse the same instance.
 - You have a signed CBOR `Message` payload where
-  `content_type` is `application/x-ma-doc`,
+  `content_type` is `application/x-ma-ipfs-request`,
   `from` is a DID whose IPNS id matches the DID document id,
   and `content` is JSON encoded `IpfsPublishDidRequest`.
 - The DID document is valid and signature-verifiable.
@@ -139,8 +138,9 @@ pub async fn publish_from_wire(
 What it does internally:
 
 1. `validate_ipfs_publish_request` verifies message and document integrity.
-1. Publisher uses its persisted, normalized URL to write DAG and publish IPNS.
-1. Returns `IpfsPublishDidResponse` with `did`, `key_name`, and `cid`.
+1. Publisher imports the IPNS key under an ephemeral name, publishes, and
+   removes the key immediately after.
+1. Returns `IpfsPublishDidResponse` with `did` and `cid`.
 
 ### 3. Verify published target
 
@@ -150,10 +150,10 @@ After publish, resolve the IPNS name and compare to expected CID path:
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn verify_publish(
   publisher: &ma_core::KuboDidPublisher,
-  key_name: &str,
+  ipns_id: &str,
   expected_cid: &str,
 ) -> anyhow::Result<()> {
-  let resolved = ma_core::kubo::name_resolve(publisher.kubo_url(), &format!("/ipns/{key_name}"), true).await?;
+  let resolved = ma_core::kubo::name_resolve(publisher.kubo_url(), &format!("/ipns/{ipns_id}"), true).await?;
   let expected = format!("/ipfs/{expected_cid}");
   anyhow::ensure!(resolved == expected, "resolved target mismatch: {resolved} != {expected}");
   Ok(())
@@ -168,7 +168,7 @@ Recommended startup/publish order:
 1. call `publisher.wait_until_ready(attempts)`
 1. decode transport bytes
 1. call `publisher.publish_signed_message(...)`
-1. emit structured log with `did`, `key_name`, `cid`
+1. emit structured log with `did`, `cid`
 1. optionally run a post-publish `name_resolve` check
 
 Minimal orchestration example:

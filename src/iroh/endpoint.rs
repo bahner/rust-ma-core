@@ -4,12 +4,13 @@ use async_trait::async_trait;
 use iroh::{endpoint::presets, Endpoint, EndpointAddr, EndpointId, SecretKey};
 use tracing::debug;
 
-use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY, DEFAULT_INBOX_TTL_SECS};
+use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
 use crate::error::{Error, Result};
 use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::resolve::DidResolver;
+use did_ma::Message;
 use crate::transport::resolve_endpoint_for_protocol;
 
 /// An iroh-backed ma endpoint.
@@ -90,8 +91,12 @@ impl IrohEndpoint {
     ) -> Result<Outbox> {
         let doc = resolver.resolve(did).await?;
 
-        let services = doc.ma.as_ref().and_then(|ma| ma.get("services"));
-        let endpoint_id = resolve_endpoint_for_protocol(services, protocol).ok_or_else(|| {
+        let services = doc
+            .ma
+            .as_ref()
+            .and_then(|ma| ma.get("services").ok().flatten())
+            .and_then(|services| serde_json::to_value(services).ok());
+        let endpoint_id = resolve_endpoint_for_protocol(services.as_ref(), protocol).ok_or_else(|| {
             Error::NoInboxTransport(format!("{} has no service for {}", did, protocol,))
         })?;
 
@@ -115,24 +120,26 @@ impl MaEndpoint for IrohEndpoint {
         self.endpoint.id().to_string()
     }
 
-    fn service(&mut self, protocol: &str) -> Inbox<Vec<u8>> {
+    fn service(&mut self, protocol: &str) -> Inbox<Message> {
         if !self.protocols.contains(&protocol.to_string()) {
             self.protocols.push(protocol.to_string());
         }
-        Inbox::new(DEFAULT_INBOX_CAPACITY, DEFAULT_INBOX_TTL_SECS)
+        Inbox::new(DEFAULT_INBOX_CAPACITY)
     }
 
     fn services(&self) -> Vec<String> {
         let id = self.endpoint.id();
         self.protocols
             .iter()
-            .map(|proto| format!("/iroh/{}/{}", id, proto))
+            .map(|proto| format!("/iroh/{}{}", id, proto))
             .collect()
     }
 
-    async fn send_to(&self, target: &str, protocol: &str, payload: &[u8]) -> Result<()> {
+    async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()> {
+        message.headers().validate()?;
+        let cbor = message.to_cbor()?;
         let mut channel = self.open(target, protocol).await?;
-        channel.send(payload).await?;
+        channel.send(&cbor).await?;
         channel.close();
         Ok(())
     }

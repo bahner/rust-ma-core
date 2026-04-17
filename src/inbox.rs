@@ -1,63 +1,40 @@
-//! Service inbox — a bounded FIFO receive queue with a default TTL.
+//! Service inbox — a bounded FIFO receive queue with per-message TTL.
 //!
-//! Wraps [`TtlQueue`] and adds a configurable default TTL so callers can
-//! `push(now, item)` without computing `expires_at` each time.
+//! Messages are pushed by the [`MaEndpoint`](crate::endpoint::MaEndpoint)
+//! implementation after validating incoming data. Each message carries its
+//! own `created_at` and `ttl` — the endpoint computes `expires_at` from
+//! those fields. Consumers only read from the inbox via
+//! [`pop`](Inbox::pop), [`peek`](Inbox::peek), or [`drain`](Inbox::drain).
 
 use crate::ttl_queue::TtlQueue;
 
-/// A bounded FIFO receive queue with a default message TTL.
+/// A bounded FIFO receive queue for incoming ma messages.
 ///
-/// Items pushed without an explicit TTL use the default. Pass `default_ttl_secs = 0`
-/// for items that never expire.
-///
-/// # Examples
-///
-/// ```
-/// use ma_core::Inbox;
-///
-/// let mut inbox: Inbox<&str> = Inbox::new(64, 300);
-/// let now = 1_000_000;
-/// inbox.push(now, "hello");
-/// assert_eq!(inbox.pop(now), Some("hello"));
-///
-/// // After the TTL expires, the message is gone:
-/// inbox.push(now, "ephemeral");
-/// assert_eq!(inbox.pop(now + 301), None);
-/// ```
+/// Only the endpoint pushes messages into the inbox after validation.
+/// Expiry is determined per-message from the message's own `created_at + ttl`.
+/// Consumers read via [`pop`](Inbox::pop), [`peek`](Inbox::peek),
+/// or [`drain`](Inbox::drain).
 #[derive(Debug, Clone)]
 pub struct Inbox<T> {
     queue: TtlQueue<T>,
-    default_ttl_secs: u64,
 }
 
 impl<T> Inbox<T> {
-    /// Create an inbox with the given capacity and default TTL (seconds).
-    ///
-    /// `default_ttl_secs = 0` means items never expire by default.
-    pub fn new(capacity: usize, default_ttl_secs: u64) -> Self {
+    /// Create an inbox with the given capacity.
+    pub fn new(capacity: usize) -> Self {
         Self {
             queue: TtlQueue::new(capacity),
-            default_ttl_secs,
         }
     }
 
-    /// Push an item using the default TTL.
-    pub fn push(&mut self, now: u64, item: T) {
-        let expires_at = if self.default_ttl_secs == 0 {
-            0
-        } else {
-            now.saturating_add(self.default_ttl_secs)
-        };
-        self.queue.push(now, expires_at, item);
-    }
-
-    /// Push an item with a custom TTL (seconds). `ttl_secs = 0` means no expiry.
-    pub fn push_with_ttl(&mut self, now: u64, ttl_secs: u64, item: T) {
-        let expires_at = if ttl_secs == 0 {
-            0
-        } else {
-            now.saturating_add(ttl_secs)
-        };
+    /// Push an item with a computed expiry timestamp.
+    ///
+    /// `expires_at` should be `message.created_at + message.ttl`.
+    /// Pass `expires_at = 0` for items that never expire.
+    ///
+    /// This is `pub(crate)` — only endpoint implementations should
+    /// write to an inbox.
+    pub(crate) fn push(&mut self, now: u64, expires_at: u64, item: T) {
         self.queue.push(now, expires_at, item);
     }
 
@@ -92,28 +69,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_ttl_applied() {
-        let mut inbox = Inbox::new(8, 60);
-        inbox.push(100, "msg");
-        // At t=100, item expires at 160 — still fresh
+    fn message_ttl_respected() {
+        let mut inbox = Inbox::new(8);
+        // Message created at t=100 with ttl=60 → expires at 160
+        inbox.push(100, 160, "msg");
         assert_eq!(inbox.peek(100), Some(&"msg"));
-        // At t=161, expired
         assert_eq!(inbox.pop(161), None);
     }
 
     #[test]
-    fn custom_ttl_overrides_default() {
-        let mut inbox = Inbox::new(8, 60);
-        inbox.push_with_ttl(100, 10, "short");
-        inbox.push(100, "default");
-        // At t=111, "short" is expired, "default" still fresh
-        assert_eq!(inbox.pop(111), Some("default"));
+    fn different_message_ttls() {
+        let mut inbox = Inbox::new(8);
+        // Short-lived message: created_at=100, ttl=10 → expires_at=110
+        inbox.push(100, 110, "short");
+        // Long-lived message: created_at=100, ttl=60 → expires_at=160
+        inbox.push(100, 160, "long");
+        // At t=111, "short" is expired, "long" still fresh
+        assert_eq!(inbox.pop(111), Some("long"));
     }
 
     #[test]
-    fn zero_default_ttl_never_expires() {
-        let mut inbox = Inbox::new(4, 0);
-        inbox.push(100, "forever");
+    fn zero_expires_at_never_expires() {
+        let mut inbox = Inbox::new(4);
+        inbox.push(100, 0, "forever");
         assert_eq!(inbox.pop(u64::MAX), Some("forever"));
     }
 }
