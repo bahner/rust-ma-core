@@ -1,3 +1,8 @@
+//! Kubo RPC client for IPFS operations.
+//!
+//! HTTP helpers for the Kubo `/api/v0/` endpoints: data add/cat, DAG
+//! put/get, IPNS name publish/resolve, key management, and pinning.
+
 use anyhow::{Result, anyhow};
 use did_ma::{Did, Document};
 use reqwest::multipart;

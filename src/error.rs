@@ -1,3 +1,5 @@
+//! Error types for ma-core.
+
 use thiserror::Error;
 
 /// Errors returned by ma-core public APIs.
@@ -18,20 +20,6 @@ pub enum Error {
 
     #[error("connection closed: {0}")]
     ConnectionClosed(String),
-
-    // ─── Framing ────────────────────────────────────────────────────────
-    #[error("frame too large: {size} bytes (max {max})")]
-    FrameTooLarge { size: usize, max: usize },
-
-    #[error("frame I/O error: {0}")]
-    FrameIo(String),
-
-    // ─── Wire protocol ──────────────────────────────────────────────────
-    #[error("invalid wire request: {0}")]
-    InvalidRequest(String),
-
-    #[error("invalid wire response: {0}")]
-    InvalidResponse(String),
 
     // ─── Validation ─────────────────────────────────────────────────────
     #[error("message validation failed: {0}")]

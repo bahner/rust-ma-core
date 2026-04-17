@@ -93,7 +93,7 @@ impl IrohEndpoint {
     ) -> Result<Outbox> {
         let doc = resolver.resolve(did).await?;
 
-        let services = doc.ma.as_ref().and_then(|ma| ma.services.as_ref());
+        let services = doc.ma.as_ref().and_then(|ma| ma.get("services"));
         let endpoint_id = resolve_endpoint_for_protocol(services, protocol)
             .ok_or_else(|| Error::NoInboxTransport(format!(
                 "{} has no service for {}",

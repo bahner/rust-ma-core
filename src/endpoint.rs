@@ -9,10 +9,10 @@ use crate::error::Result;
 use crate::inbox::Inbox;
 
 /// Default inbox capacity for services.
-pub(crate) const DEFAULT_INBOX_CAPACITY: usize = 256;
+pub const DEFAULT_INBOX_CAPACITY: usize = 256;
 
 /// Default inbox TTL in seconds (5 minutes).
-pub(crate) const DEFAULT_INBOX_TTL_SECS: u64 = 300;
+pub const DEFAULT_INBOX_TTL_SECS: u64 = 300;
 
 /// Default protocol ID for unqualified send/request calls.
 pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = "ma/inbox/0.0.1";

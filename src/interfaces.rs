@@ -1,3 +1,8 @@
+//! Trait interfaces for pluggable DID and IPFS publishing backends.
+//!
+//! Implement these traits to decouple domain logic from a specific
+//! transport or storage backend.
+
 pub trait DidPublisher {
     type Error;
 

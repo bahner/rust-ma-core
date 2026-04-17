@@ -10,22 +10,20 @@
 /// incoming connections. Built-in services ship with ma-core; applications
 /// add custom services via this trait.
 ///
-/// # Example
+/// # Examples
 ///
-/// ```ignore
-/// use ma_core::service::Service;
+/// ```
+/// use ma_core::Service;
 ///
-/// struct MyCustomService;
+/// struct MyService;
 ///
-/// impl Service for MyCustomService {
-///     fn protocol(&self) -> &[u8] {
-///         b"ma/my-service/0.0.1"
-///     }
-///
-///     fn label(&self) -> &str {
-///         "my-service"
-///     }
+/// impl Service for MyService {
+///     fn protocol(&self) -> &[u8] { b"ma/my-service/0.0.1" }
+///     fn label(&self) -> &str { "my-service" }
 /// }
+///
+/// let svc = MyService;
+/// assert_eq!(svc.label(), "my-service");
 /// ```
 pub trait Service: Send + Sync {
     /// The protocol identifier for this service.

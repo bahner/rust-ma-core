@@ -1,7 +1,7 @@
 //! Transport-agnostic send handle to a remote ma service.
 //!
 //! An `Outbox` wraps the transport details and exposes only
-//! `send()` + `close()`. Created via [`IrohEndpoint::outbox`].
+//! `send()` + `close()`. Created via [`crate::iroh::IrohEndpoint::outbox`].
 //!
 //! ```ignore
 //! let mut outbox = ep.outbox("did:ma:456", b"ma/presence/0.0.1").await?;

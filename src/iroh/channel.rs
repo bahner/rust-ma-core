@@ -1,17 +1,16 @@
 //! Write-only persistent connection handle to a remote ma endpoint.
 //!
 //! A `Channel` wraps an iroh `Connection` + `SendStream` for sending
-//! framed one-way messages. Created via [`MaEndpoint::open`].
+//! one-way messages. Created via [`crate::iroh::IrohEndpoint::open`].
 
 use iroh::endpoint::{Connection, SendStream};
+use tokio::io::AsyncWriteExt;
 
-use crate::error::Result;
-use crate::frame::{write_frame, DEFAULT_MAX_FRAME_SIZE};
+use crate::error::{Error, Result};
 
 /// A persistent write-only handle to a remote endpoint on a specific protocol.
 ///
-/// Messages are sent as length-prefixed frames. The channel stays open until
-/// explicitly closed or the connection drops.
+/// The channel stays open until explicitly closed or the connection drops.
 #[derive(Debug)]
 pub struct Channel {
     connection: Connection,
@@ -24,14 +23,17 @@ impl Channel {
         Self { connection, send }
     }
 
-    /// Send a framed payload over the channel.
+    /// Send a payload over the channel.
     pub async fn send(&mut self, payload: &[u8]) -> Result<()> {
-        write_frame(&mut self.send, payload, DEFAULT_MAX_FRAME_SIZE).await
-    }
-
-    /// Send a framed payload with a custom max frame size.
-    pub async fn send_with_max(&mut self, payload: &[u8], max_size: usize) -> Result<()> {
-        write_frame(&mut self.send, payload, max_size).await
+        self.send
+            .write_all(payload)
+            .await
+            .map_err(|e| Error::Transport(format!("channel write failed: {e}")))?;
+        self.send
+            .flush()
+            .await
+            .map_err(|e| Error::Transport(format!("channel flush failed: {e}")))?;
+        Ok(())
     }
 
     /// Close the channel gracefully.

@@ -1,3 +1,9 @@
+//! DID document publishing to IPFS/IPNS.
+//!
+//! Provides request/response types, validation, and (with the `kubo` feature)
+//! the [`KuboDidPublisher`] for publishing signed DID documents via the
+//! `ma/ipfs/0.0.1` service.
+
 use anyhow::{Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;

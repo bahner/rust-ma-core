@@ -1,3 +1,8 @@
+//! Safe pin lifecycle management.
+//!
+//! [`pin_update_add_rm`] pins a new CID, then attempts to unpin the old
+//! one, reporting any unpin failure as metadata rather than a hard error.
+
 use std::future::Future;
 
 use anyhow::Result;

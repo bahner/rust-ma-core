@@ -1,10 +1,45 @@
+//! # ma-core
+//!
+//! A lean DIDComm service library for the ma ecosystem.
+//!
+//! `ma-core` provides the building blocks for ma-capable endpoints:
+//!
+//! - **DID documents** — create, validate, resolve, and publish `did:ma:` documents
+//!   to IPFS/IPNS (via Kubo or custom backends).
+//! - **Service inboxes** — bounded, TTL-aware FIFO queues ([`Inbox`] / [`TtlQueue`])
+//!   for receiving messages on named protocol services.
+//! - **Outbox sending** — fire-and-forget delivery to remote endpoints on any
+//!   registered protocol ([`Outbox`]).
+//! - **Endpoint abstraction** — the [`MaEndpoint`] trait with an iroh-backed
+//!   implementation ([`IrohEndpoint`], behind the `iroh` feature).
+//! - **Transport parsing** — extract endpoint IDs and protocols from DID document
+//!   service strings (`/iroh/<id>/<protocol>`).
+//! - **Identity bootstrap** — secure secret key generation and persistence.
+//!
+//! ## Services
+//!
+//! Every endpoint must provide `ma/inbox/0.0.1` (the default inbox).
+//! Endpoints may optionally provide `ma/ipfs/0.0.1` to publish DID documents
+//! on behalf of others.
+//!
+//! ## Feature flags
+//!
+//! - **`kubo`** (default) — enables Kubo RPC client for IPFS publishing.
+//! - **`iroh`** — enables the iroh QUIC transport backend ([`IrohEndpoint`],
+//!   [`Channel`], [`Outbox`]).
+//!
+//! ## Platform support
+//!
+//! Core types (`Inbox`, `TtlQueue`, `Service`, transport parsing, validation)
+//! compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
+//! resolution, and iroh require a native target.
+
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "iroh")]
 pub mod iroh;
 pub mod endpoint;
 pub mod error;
-pub mod frame;
 pub mod identity;
 pub mod inbox;
 pub mod interfaces;
@@ -15,7 +50,6 @@ pub mod resolve;
 pub mod service;
 pub mod transport;
 pub mod ttl_queue;
-pub mod wire;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub mod kubo;
@@ -43,14 +77,6 @@ pub use service::{
     CONTENT_TYPE_MESSAGE, CONTENT_TYPE_PRESENCE, CONTENT_TYPE_WHISPER,
     CONTENT_TYPE_WORLD, DEFAULT_CONTENT_TYPE,
 };
-
-// ─── Re-export wire types ───────────────────────────────────────────────────
-
-pub use wire::{ServiceRequest, ServiceResponse};
-
-// ─── Re-export framing ──────────────────────────────────────────────────────
-
-pub use frame::{DEFAULT_MAX_FRAME_SIZE, read_frame, write_frame};
 
 // ─── Re-export TtlQueue ─────────────────────────────────────────────────────
 

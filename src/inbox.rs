@@ -9,6 +9,21 @@ use crate::ttl_queue::TtlQueue;
 ///
 /// Items pushed without an explicit TTL use the default. Pass `default_ttl_secs = 0`
 /// for items that never expire.
+///
+/// # Examples
+///
+/// ```
+/// use ma_core::Inbox;
+///
+/// let mut inbox: Inbox<&str> = Inbox::new(64, 300);
+/// let now = 1_000_000;
+/// inbox.push(now, "hello");
+/// assert_eq!(inbox.pop(now), Some("hello"));
+///
+/// // After the TTL expires, the message is gone:
+/// inbox.push(now, "ephemeral");
+/// assert_eq!(inbox.pop(now + 301), None);
+/// ```
 #[derive(Debug, Clone)]
 pub struct Inbox<T> {
     queue: TtlQueue<T>,

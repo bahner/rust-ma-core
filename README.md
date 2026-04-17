@@ -1,120 +1,97 @@
 # ma-core
 
-`ma-core` is a shared library for the ma ecosystem, focused on:
+A lean DIDComm service library for the ma ecosystem.
 
-- publishing DID documents to IPFS/IPNS
-- validating signed publish messages
-- Kubo integration (non-WASM)
-- pin lifecycle management when content changes
-- small, stable trait interfaces for pluggable backends
+`ma-core` provides everything an ma endpoint needs: DID document publishing,
+service inboxes, outbox delivery, and transport abstraction — without coupling
+to any specific runtime or application.
 
-The goal is to keep the core flow simple: validate input strictly, publish safely, and expose a compact API reusable by multiple binaries.
+## What it provides
 
-## What the library provides
+### Messaging primitives
 
-### `interfaces`
+- **`TtlQueue`** — bounded FIFO queue with per-item TTL and lazy eviction.
+  Wasm-compatible (caller supplies `now`).
+- **`Inbox`** — a `TtlQueue` wrapper with a configurable default TTL for
+  service receive queues.
+- **`Outbox`** — transport-agnostic write handle for fire-and-forget delivery
+  to a remote service.
 
-Trait interfaces for dependency inversion:
+### Service model
 
-- `DidPublisher`
-- `IpfsPublisher`
+- **`Service` trait** — declares a protocol identifier and label.
+- **`MaEndpoint` trait** — shared interface for all transport endpoints:
+  register services, get inboxes, send messages.
+- **`IrohEndpoint`** (behind `iroh` feature) — iroh QUIC-backed implementation
+  of `MaEndpoint`.
 
-This allows runtime layers to implement publishing without coupling domain logic to one specific transport or backend.
+Every endpoint must provide `ma/inbox/0.0.1`. Endpoints may optionally
+provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
 
-### `ipfs_publish`
+### DID document publishing
 
-Core logic for DID publishing:
+- **`validate_ipfs_publish_request`** — decodes a signed CBOR message,
+  enforces `application/x-ma-doc` content type, validates the document,
+  verifies sender matches IPNS identity.
+- **`KuboDidPublisher`** (non-WASM, `kubo` feature) — publishes validated
+  documents to IPFS via Kubo RPC.
+- **`publish_did_document_to_kubo`** / **`handle_ipfs_publish`** — lower-level
+  publish helpers.
 
-- `KuboDidPublisher` (non-WASM only)
-  - created once with a `kubo_url`
-  - stores that URL for the lifetime of the publisher instance
-  - normalizes URL forms (for example trailing `/` or `/api/v0` suffix)
-  - does not require one exact hardcoded Kubo URL string
-- `validate_ipfs_publish_request(...)`
-  - decodes a signed CBOR message
-  - enforces the correct content type (`application/x-ma-doc`)
-  - validates and verifies the DID document
-  - verifies that the sender matches the document IPNS identity
-- `publish_did_document_to_kubo(...)` (non-WASM only)
-  - finds/validates a Kubo key
-  - imports key material when needed
-  - writes the document to DAG
-  - publishes IPNS with retry
-- `handle_ipfs_publish(...)` (non-WASM only)
-  - orchestrates validation + publish
-  - returns `IpfsPublishDidResponse`
+### DID resolution
 
-Key types:
+- **`DidResolver` trait** — async DID-to-Document resolution.
+- **`GatewayResolver`** — resolves via an IPFS/IPNS HTTP gateway.
 
-- `KuboDidPublisher` (non-WASM)
-- `IpfsPublishDidRequest`
-- `IpfsPublishDidResponse`
-- `ValidatedIpfsPublish`
+### Transport parsing
 
-### `kubo` (non-WASM only)
+Parses DID document service strings like `/iroh/<endpoint-id>/ma/inbox/0.0.1`:
 
-HTTP client logic for the Kubo API (`/api/v0/...`), including:
+- `endpoint_id_from_transport` / `protocol_from_transport`
+- `resolve_endpoint_for_protocol` / `resolve_inbox_endpoint_id`
+- `transport_string` — build service strings from parts.
 
-- readiness: `wait_for_api`
-- data: `ipfs_add`, `cat_bytes`, `cat_text`
-- DAG: `dag_put`, `dag_get`
-- naming/IPNS: `name_publish*`, `name_resolve`
-- DID fetch: `fetch_did_document`
-- pinning: `pin_add_named`, `pin_rm`
-- key management: `generate_key`, `import_key`, `list_keys`
+### Identity bootstrap
 
-Constants and options:
+- `generate_secret_key_file` / `load_secret_key_bytes` — secure 32-byte
+  key persistence with OS-level permission hardening.
 
-- `DEFAULT_KUBO_API_URL`
-- `IpnsPublishOptions`
-- `KuboKey`
+### Pinning
 
-### `pinning`
+- `pin_update_add_rm` — pin new CID, unpin old, report unpin failures as
+  metadata (not hard errors).
 
-Generic helper for safe pin updates:
+### Kubo RPC (non-WASM, `kubo` feature)
 
-- `pin_update_add_rm(...)`
+HTTP client for Kubo `/api/v0/` endpoints: add, cat, DAG put/get,
+IPNS publish/resolve, key management, pinning.
 
-Flow:
+## Feature flags
 
-1. pin the new CID
-2. attempt to unpin the old CID
-3. return any unpin failure as metadata in `PinUpdateOutcome`
+| Feature | Default | Description |
+|---------|---------|-------------|
+| `kubo`  | yes     | Kubo RPC client for IPFS publishing |
+| `iroh`  | no      | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
 
 ## Platform support
 
-- WASM:
-  - `interfaces`, `ipfs_publish` validation, and `pinning` are available
-  - the Kubo module is not compiled in
-- Non-WASM:
-  - full functionality including Kubo integration
-
-This is controlled via `#[cfg(not(target_arch = "wasm32"))]`.
-
-## Public API (re-exports)
-
-The crate re-exports core symbols from `lib.rs`, including:
-
-- `DidPublisher`, `IpfsPublisher`
-- `CONTENT_TYPE_DOC`
-- `IpfsPublishDidRequest`, `IpfsPublishDidResponse`, `ValidatedIpfsPublish`
-- `KuboDidPublisher` (non-WASM)
-- `validate_ipfs_publish_request`
-- `handle_ipfs_publish`, `publish_did_document_to_kubo` (non-WASM)
-- `KuboKey` (non-WASM)
-- `pin_update_add_rm`, `PinUpdateOutcome`
+Core types (`Inbox`, `TtlQueue`, `Service`, transport parsing, validation)
+compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
+resolution, and iroh require a native target.
 
 ## Quick usage
 
-Example: validating a signed IPFS publish message:
-
 ```rust
-use ma_core::validate_ipfs_publish_request;
+use ma_core::{Inbox, INBOX_PROTOCOL};
 
-fn validate(bytes: &[u8]) -> anyhow::Result<()> {
-    let validated = validate_ipfs_publish_request(bytes)?;
-    println!("validated did: {}", validated.document_did.id());
-    Ok(())
+// Create an inbox with capacity 256 and 5-minute default TTL
+let mut inbox: Inbox<Vec<u8>> = Inbox::new(256, 300);
+
+let now = 1_000_000;
+inbox.push(now, b"hello".to_vec());
+
+if let Some(msg) = inbox.pop(now) {
+    println!("got {} bytes", msg.len());
 }
 ```
 

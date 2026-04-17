@@ -10,6 +10,20 @@ use std::collections::VecDeque;
 ///
 /// Expired items are evicted lazily on `push`, `pop`, and `drain`.
 /// When the queue is at capacity, the oldest item is dropped on `push`.
+///
+/// # Examples
+///
+/// ```
+/// use ma_core::TtlQueue;
+///
+/// let mut q = TtlQueue::new(8);
+/// let now = 100;
+/// q.push(now, now + 60, "expires in 60s");
+/// q.push(now, 0, "never expires");
+///
+/// // Both present at t=100
+/// assert_eq!(q.drain(now).len(), 2);
+/// ```
 #[derive(Debug, Clone)]
 pub struct TtlQueue<T> {
     buf: VecDeque<(u64, T)>,

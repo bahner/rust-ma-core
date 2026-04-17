@@ -2,8 +2,13 @@
 name = "ma-core"
 version = "0.1.0"
 edition = "2021"
-description = "Core library for building ma-capable applications"
+description = "DIDComm service library: inboxes, outboxes, DID document publishing, and transport abstraction"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/bahner/ma-core"
+documentation = "https://docs.rs/ma-core"
+readme = "README.md"
+keywords = ["did", "didcomm", "ipfs", "messaging"]
+categories = ["network-programming", "authentication"]
 
 [features]
 default = ["kubo"]
@@ -14,7 +19,7 @@ iroh = ["dep:iroh"]
 anyhow = "1.0"
 async-trait = "0.1"
 base64 = "0.22"
-did-ma = { package = "ma-did", path = "../did" }
+did-ma = { package = "ma-did", version = "0.2" }
 iroh = { version = "0.97.0", optional = true }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
