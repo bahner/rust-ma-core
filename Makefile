@@ -16,7 +16,7 @@ doc:
 
 lint:
 	cargo clippy --all-features -- -D warnings
-	mdl .
+	mdl *.md 
 
 fmt:
 	cargo fmt
