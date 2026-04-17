@@ -5,11 +5,11 @@ use did_ma::{Did, Document, Message};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use crate::kubo::{
     IpnsPublishOptions, dag_put, import_key, list_keys, name_publish_with_retry,
 };
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
 pub const CONTENT_TYPE_DOC: &str = "application/x-ma-doc";
@@ -41,13 +41,13 @@ pub struct ValidatedIpfsPublish {
     pub document_did: Did,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 #[derive(Clone, Debug)]
 pub struct KuboDidPublisher {
     kubo_url: String,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 impl KuboDidPublisher {
     pub fn new(kubo_url: impl AsRef<str>) -> Result<Self> {
         let kubo_url = normalize_kubo_url(kubo_url.as_ref())?;
@@ -85,7 +85,7 @@ impl KuboDidPublisher {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 fn normalize_kubo_url(input: &str) -> Result<String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -182,7 +182,7 @@ pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpf
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub async fn publish_did_document_to_kubo(
     kubo_url: &str,
     did_document_json: &str,
@@ -259,7 +259,7 @@ pub async fn publish_did_document_to_kubo(
     Ok((Some(key_name), Some(document_cid)))
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub async fn handle_ipfs_publish(
     kubo_url: &str,
     message_cbor: &[u8],
@@ -283,7 +283,7 @@ pub async fn handle_ipfs_publish(
     })
 }
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, not(target_arch = "wasm32"), feature = "kubo"))]
 mod tests {
     use super::normalize_kubo_url;
 
