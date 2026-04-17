@@ -38,12 +38,12 @@
 
 pub mod endpoint;
 pub mod error;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod gossip;
 pub mod identity;
 pub mod inbox;
 pub mod interfaces;
 pub mod ipfs_publish;
-#[cfg(not(target_arch = "wasm32"))]
-pub mod gossip;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod iroh;
 #[cfg(not(target_arch = "wasm32"))]
@@ -74,8 +74,8 @@ pub use error::{Error, Result};
 // ─── Re-export service constants ────────────────────────────────────────────
 
 pub use service::{
-    Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST,
-    CONTENT_TYPE_DOC, CONTENT_TYPE_IPFS_REQUEST, CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL, IPFS_PROTOCOL,
+    Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST, CONTENT_TYPE_DOC,
+    CONTENT_TYPE_IPFS_REQUEST, CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL, IPFS_PROTOCOL,
 };
 
 // ─── Re-export Inbox ────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ pub use inbox::Inbox;
 
 // ─── Re-export Topic ────────────────────────────────────────────────────────
 
-pub use topic::{Topic, TopicId, topic_id};
+pub use topic::{topic_id, Topic, TopicId};
 
 // ─── Re-export endpoint trait and implementations ───────────────────────────
 
@@ -99,16 +99,19 @@ pub use outbox::Outbox;
 // ─── Re-export iroh primitives so dependents don't need a direct iroh dep ───
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use ::iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
-#[cfg(not(target_arch = "wasm32"))]
-pub use ::iroh::endpoint::{Connection, RecvStream, SendStream, presets};
+pub use ::iroh::endpoint::{presets, Connection, RecvStream, SendStream};
 #[cfg(not(target_arch = "wasm32"))]
 pub use ::iroh::protocol::{AcceptError, ProtocolHandler, Router};
+#[cfg(not(target_arch = "wasm32"))]
+pub use ::iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
 
 // ─── Re-export gossip helpers ────────────────────────────────────────────────
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use gossip::{broadcast_topic_id, gossip_send, gossip_send_text, join_broadcast_channel, join_gossip_topic, topic_id_for};
+pub use gossip::{
+    broadcast_topic_id, gossip_send, gossip_send_text, join_broadcast_channel, join_gossip_topic,
+    topic_id_for,
+};
 
 // ─── Re-export transport parsing ────────────────────────────────────────────
 

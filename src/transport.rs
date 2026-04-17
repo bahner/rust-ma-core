@@ -160,7 +160,10 @@ mod tests {
     #[test]
     fn parse_protocol_from_legacy_transport() {
         let input = "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/presence/0.0.1";
-        assert_eq!(protocol_from_transport(input).unwrap(), "/ma/presence/0.0.1");
+        assert_eq!(
+            protocol_from_transport(input).unwrap(),
+            "/ma/presence/0.0.1"
+        );
     }
 
     #[test]

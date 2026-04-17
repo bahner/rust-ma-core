@@ -10,8 +10,8 @@ use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::resolve::DidResolver;
-use did_ma::Message;
 use crate::transport::resolve_endpoint_for_protocol;
+use did_ma::Message;
 
 /// An iroh-backed ma endpoint.
 pub struct IrohEndpoint {
@@ -96,9 +96,10 @@ impl IrohEndpoint {
             .as_ref()
             .and_then(|ma| ma.get("services").ok().flatten())
             .and_then(|services| serde_json::to_value(services).ok());
-        let endpoint_id = resolve_endpoint_for_protocol(services.as_ref(), protocol).ok_or_else(|| {
-            Error::NoInboxTransport(format!("{} has no service for {}", did, protocol,))
-        })?;
+        let endpoint_id =
+            resolve_endpoint_for_protocol(services.as_ref(), protocol).ok_or_else(|| {
+                Error::NoInboxTransport(format!("{} has no service for {}", did, protocol,))
+            })?;
 
         let channel = self.open(&endpoint_id, protocol).await?;
         Ok(Outbox::from_channel(

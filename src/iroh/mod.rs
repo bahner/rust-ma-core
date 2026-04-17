@@ -4,4 +4,3 @@ pub mod channel;
 mod endpoint;
 
 pub use endpoint::IrohEndpoint;
-

@@ -16,9 +16,7 @@ use base64::Engine;
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::kubo::{
-    dag_put, import_key, name_publish_with_retry, IpnsPublishOptions,
-};
+use crate::kubo::{dag_put, import_key, name_publish_with_retry, IpnsPublishOptions};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
@@ -76,12 +74,8 @@ impl KuboDidPublisher {
         did_document_json: &str,
         ipns_private_key_base64: &str,
     ) -> Result<Option<String>> {
-        publish_did_document_to_kubo(
-            &self.kubo_url,
-            did_document_json,
-            ipns_private_key_base64,
-        )
-        .await
+        publish_did_document_to_kubo(&self.kubo_url, did_document_json, ipns_private_key_base64)
+            .await
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
