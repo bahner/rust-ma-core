@@ -115,10 +115,10 @@ This section shows a concrete non-WASM flow for publishing a DID document throug
 
 - Kubo API is reachable at whichever base URL your environment uses.
 - Create a publisher once with that URL and reuse the same instance.
-- You have a signed CBOR `Message` payload where:
-  - `content_type` is `application/x-ma-doc`
-  - `from` is a DID whose IPNS id matches the DID document id
-  - `content` is JSON encoded `IpfsPublishDidRequest`
+- You have a signed CBOR `Message` payload where
+  `content_type` is `application/x-ma-doc`,
+  `from` is a DID whose IPNS id matches the DID document id,
+  and `content` is JSON encoded `IpfsPublishDidRequest`.
 - The DID document is valid and signature-verifiable.
 
 ### 2. Validate and publish
@@ -139,8 +139,8 @@ pub async fn publish_from_wire(
 What it does internally:
 
 1. `validate_ipfs_publish_request` verifies message and document integrity.
-2. Publisher uses its persisted, normalized URL to write DAG and publish IPNS.
-3. Returns `IpfsPublishDidResponse` with `did`, `key_name`, and `cid`.
+1. Publisher uses its persisted, normalized URL to write DAG and publish IPNS.
+1. Returns `IpfsPublishDidResponse` with `did`, `key_name`, and `cid`.
 
 ### 3. Verify published target
 
@@ -165,11 +165,11 @@ pub async fn verify_publish(
 Recommended startup/publish order:
 
 1. create `KuboDidPublisher::new(kubo_url)` once
-2. call `publisher.wait_until_ready(attempts)`
-3. decode transport bytes
-4. call `publisher.publish_signed_message(...)`
-5. emit structured log with `did`, `key_name`, `cid`
-6. optionally run a post-publish `name_resolve` check
+1. call `publisher.wait_until_ready(attempts)`
+1. decode transport bytes
+1. call `publisher.publish_signed_message(...)`
+1. emit structured log with `did`, `key_name`, `cid`
+1. optionally run a post-publish `name_resolve` check
 
 Minimal orchestration example:
 

@@ -49,7 +49,7 @@ pub fn generate_secret_key_file(path: &Path) -> Result<[u8; 32]> {
             .map_err(|e| Error::SecretKey(format!("failed to create dir {}: {}", parent.display(), e)))?;
     }
 
-    fs::write(path, &key_bytes)
+    fs::write(path, key_bytes)
         .map_err(|e| Error::SecretKey(format!("failed to write {}: {}", path.display(), e)))?;
 
     // Best-effort permission hardening on Unix

@@ -5,10 +5,14 @@
 //! `ma/ipfs/0.0.1` service.
 
 use anyhow::{Result, anyhow};
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
 use did_ma::{Did, Document, Message};
 use serde::{Deserialize, Serialize};
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use base64::Engine;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use base64::engine::general_purpose::STANDARD as B64;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]

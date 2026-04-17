@@ -44,6 +44,7 @@ pub mod identity;
 pub mod inbox;
 pub mod interfaces;
 pub mod ipfs_publish;
+#[cfg(feature = "iroh")]
 pub mod outbox;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod resolve;

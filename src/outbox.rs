@@ -3,6 +3,8 @@
 //! An `Outbox` wraps the transport details and exposes only
 //! `send()` + `close()`. Created via [`crate::iroh::IrohEndpoint::outbox`].
 //!
+//! Requires the `iroh` feature.
+//!
 //! ```ignore
 //! let mut outbox = ep.outbox("did:ma:456", b"ma/presence/0.0.1").await?;
 //! outbox.send(event_bytes).await?;
@@ -10,7 +12,6 @@
 //! outbox.close();
 //! ```
 
-#[cfg(feature = "iroh")]
 use crate::iroh::channel::Channel;
 use crate::error::Result;
 
@@ -26,13 +27,11 @@ pub struct Outbox {
 
 #[derive(Debug)]
 enum OutboxTransport {
-    #[cfg(feature = "iroh")]
     Channel(Channel),
 }
 
 impl Outbox {
     /// Create an outbox backed by a channel.
-    #[cfg(feature = "iroh")]
     pub(crate) fn from_channel(channel: Channel, did: String, protocol: String) -> Self {
         Self {
             inner: OutboxTransport::Channel(channel),
@@ -41,13 +40,10 @@ impl Outbox {
         }
     }
 
-    /// Send a framed payload to the remote service.
+    /// Send a payload to the remote service.
     pub async fn send(&mut self, payload: &[u8]) -> Result<()> {
         match &mut self.inner {
-            #[cfg(feature = "iroh")]
             OutboxTransport::Channel(channel) => channel.send(payload).await,
-            #[cfg(not(feature = "iroh"))]
-            _ => unreachable!("no transport backend enabled"),
         }
     }
 
@@ -64,10 +60,7 @@ impl Outbox {
     /// Close the outbox gracefully.
     pub fn close(self) {
         match self.inner {
-            #[cfg(feature = "iroh")]
             OutboxTransport::Channel(channel) => channel.close(),
-            #[cfg(not(feature = "iroh"))]
-            _ => unreachable!("no transport backend enabled"),
         }
     }
 }
