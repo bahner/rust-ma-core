@@ -32,9 +32,9 @@ impl<T> Inbox<T> {
     /// `expires_at` should be `message.created_at + message.ttl`.
     /// Pass `expires_at = 0` for items that never expire.
     ///
-    /// This is `pub(crate)` — only endpoint implementations should
-    /// write to an inbox.
-    pub(crate) fn push(&mut self, now: u64, expires_at: u64, item: T) {
+    /// Used by endpoint implementations and for local in-process delivery
+    /// (e.g. world routing a message directly to an object/room inbox).
+    pub fn push(&mut self, now: u64, expires_at: u64, item: T) {
         self.queue.push(now, expires_at, item);
     }
 
