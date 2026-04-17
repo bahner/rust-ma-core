@@ -1,9 +1,12 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 permissions:
   contents: write
@@ -11,26 +14,50 @@ permissions:
 
 jobs:
   release:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - name: Resolve release tag
+        id: tag
+        shell: bash
+        run: |
+          tag="$(git tag --points-at "${{ github.event.workflow_run.head_sha }}" | grep -E '^v' | head -n1)"
+          if [ -z "$tag" ]; then
+            echo "No v* tag found on commit; skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "should_release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust
+        if: steps.tag.outputs.should_release == 'true'
         run: rustup toolchain install stable
 
       - name: Run tests
+        if: steps.tag.outputs.should_release == 'true'
         run: cargo test --all-features
 
       - uses: rust-lang/crates-io-auth-action@v1
+        if: steps.tag.outputs.should_release == 'true'
         id: auth
 
       - name: Publish to crates.io
+        if: steps.tag.outputs.should_release == 'true'
         run: cargo publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
 
       - name: Create GitHub release
+        if: steps.tag.outputs.should_release == 'true'
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          target_commitish: ${{ github.event.workflow_run.head_sha }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(steps.tag.outputs.tag, '-') }}
