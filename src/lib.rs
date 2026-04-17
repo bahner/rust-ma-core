@@ -36,7 +36,7 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "iroh")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub mod iroh;
 pub mod endpoint;
 pub mod error;
@@ -44,7 +44,7 @@ pub mod identity;
 pub mod inbox;
 pub mod interfaces;
 pub mod ipfs_publish;
-#[cfg(feature = "iroh")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub mod outbox;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod resolve;
@@ -90,11 +90,11 @@ pub use inbox::Inbox;
 // ─── Re-export endpoint trait and implementations ───────────────────────────
 
 pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
-#[cfg(feature = "iroh")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub use iroh::IrohEndpoint;
-#[cfg(feature = "iroh")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub use iroh::channel::Channel;
-#[cfg(feature = "iroh")]
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub use outbox::Outbox;
 
 // ─── Re-export transport parsing ────────────────────────────────────────────
