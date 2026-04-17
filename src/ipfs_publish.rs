@@ -4,21 +4,19 @@
 //! the [`KuboDidPublisher`] for publishing signed DID documents via the
 //! `ma/ipfs/0.0.1` service.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use did_ma::{Did, Document, Message};
 use serde::{Deserialize, Serialize};
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use base64::Engine;
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use base64::engine::general_purpose::STANDARD as B64;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use base64::Engine;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::kubo::{
-    IpnsPublishOptions, dag_put, import_key, list_keys, name_publish_with_retry,
-};
+use crate::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
@@ -102,8 +100,8 @@ fn normalize_kubo_url(input: &str) -> Result<String> {
         return Err(anyhow!("kubo_url must not be empty"));
     }
 
-    let parsed = Url::parse(trimmed)
-        .map_err(|e| anyhow!("invalid kubo_url '{}': {}", trimmed, e))?;
+    let parsed =
+        Url::parse(trimmed).map_err(|e| anyhow!("invalid kubo_url '{}': {}", trimmed, e))?;
 
     let scheme = parsed.scheme();
     if scheme != "http" && scheme != "https" {
@@ -144,8 +142,8 @@ fn normalize_kubo_url(input: &str) -> Result<String> {
 }
 
 pub fn validate_ipfs_publish_request(message_cbor: &[u8]) -> Result<ValidatedIpfsPublish> {
-    let message = Message::from_cbor(message_cbor)
-        .map_err(|e| anyhow!("invalid signed message: {}", e))?;
+    let message =
+        Message::from_cbor(message_cbor).map_err(|e| anyhow!("invalid signed message: {}", e))?;
 
     if message.content_type != CONTENT_TYPE_DOC {
         return Err(anyhow!(

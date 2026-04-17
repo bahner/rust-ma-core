@@ -1,10 +1,7 @@
 //! Iroh-backed [`MaEndpoint`] implementation.
 
 use async_trait::async_trait;
-use iroh::{
-    Endpoint, EndpointAddr, EndpointId, SecretKey,
-    endpoint::presets,
-};
+use iroh::{endpoint::presets, Endpoint, EndpointAddr, EndpointId, SecretKey};
 use tracing::debug;
 
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY, DEFAULT_INBOX_TTL_SECS};
@@ -94,14 +91,16 @@ impl IrohEndpoint {
         let doc = resolver.resolve(did).await?;
 
         let services = doc.ma.as_ref().and_then(|ma| ma.get("services"));
-        let endpoint_id = resolve_endpoint_for_protocol(services, protocol)
-            .ok_or_else(|| Error::NoInboxTransport(format!(
-                "{} has no service for {}",
-                did, protocol,
-            )))?;
+        let endpoint_id = resolve_endpoint_for_protocol(services, protocol).ok_or_else(|| {
+            Error::NoInboxTransport(format!("{} has no service for {}", did, protocol,))
+        })?;
 
         let channel = self.open(&endpoint_id, protocol).await?;
-        Ok(Outbox::from_channel(channel, did.to_string(), protocol.to_string()))
+        Ok(Outbox::from_channel(
+            channel,
+            did.to_string(),
+            protocol.to_string(),
+        ))
     }
 
     /// Shut down the endpoint.

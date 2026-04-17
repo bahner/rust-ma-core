@@ -59,12 +59,7 @@ pub fn endpoint_id_from_transport_value(value: &serde_json::Value) -> Option<Str
     match value {
         serde_json::Value::String(s) => endpoint_id_from_transport(s),
         serde_json::Value::Object(map) => {
-            for key in [
-                "endpoint_id",
-                "endpointId",
-                "iroh",
-                "address",
-            ] {
+            for key in ["endpoint_id", "endpointId", "iroh", "address"] {
                 if let Some(serde_json::Value::String(s)) = map.get(key) {
                     if let Some(endpoint) = endpoint_id_from_transport(s) {
                         return Some(endpoint);
@@ -80,9 +75,7 @@ pub fn endpoint_id_from_transport_value(value: &serde_json::Value) -> Option<Str
 /// Resolve the inbox endpoint ID from a DID document's `ma` section.
 ///
 /// Iterates `services` array entries looking for a parseable endpoint ID.
-pub fn resolve_inbox_endpoint_id(
-    services: Option<&serde_json::Value>,
-) -> Option<String> {
+pub fn resolve_inbox_endpoint_id(services: Option<&serde_json::Value>) -> Option<String> {
     let value = services?;
     if let Some(items) = value.as_array() {
         for item in items {
@@ -137,9 +130,13 @@ mod tests {
 
     #[test]
     fn parse_iroh_transport() {
-        let input = "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
+        let input =
+            "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
         let id = endpoint_id_from_transport(input).unwrap();
-        assert_eq!(id, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            id,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
     }
 
     #[test]
@@ -147,12 +144,16 @@ mod tests {
         // Postel's law: still accept /ma-iroh/ on input
         let input = "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
         let id = endpoint_id_from_transport(input).unwrap();
-        assert_eq!(id, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            id,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
     }
 
     #[test]
     fn parse_protocol_from_transport() {
-        let input = "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
+        let input =
+            "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
         assert_eq!(protocol_from_transport(input).unwrap(), "ma/inbox/0.0.1");
     }
 
@@ -192,7 +193,10 @@ mod tests {
             "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1"
         ]);
         let id = resolve_inbox_endpoint_id(Some(&services)).unwrap();
-        assert_eq!(id, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            id,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
     }
 
     #[test]
@@ -202,7 +206,10 @@ mod tests {
             "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1"
         ]);
         let id = resolve_inbox_endpoint_id(Some(&services)).unwrap();
-        assert_eq!(id, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            id,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
     }
 
     #[test]
@@ -212,12 +219,21 @@ mod tests {
             "/iroh/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/ma/presence/0.0.1"
         ]);
         let id = resolve_endpoint_for_protocol(Some(&services), "ma/presence/0.0.1").unwrap();
-        assert_eq!(id, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        assert_eq!(
+            id,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
     }
 
     #[test]
     fn transport_string_format() {
-        let s = transport_string("abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234", "ma/inbox/0.0.1");
-        assert_eq!(s, "/iroh/abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234/ma/inbox/0.0.1");
+        let s = transport_string(
+            "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+            "ma/inbox/0.0.1",
+        );
+        assert_eq!(
+            s,
+            "/iroh/abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234/ma/inbox/0.0.1"
+        );
     }
 }

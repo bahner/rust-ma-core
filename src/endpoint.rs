@@ -49,6 +49,7 @@ pub trait MaEndpoint: Send + Sync {
 
     /// Fire-and-forget to a target on the default inbox protocol.
     async fn send(&self, target: &str, payload: &[u8]) -> Result<()> {
-        self.send_to(target, DEFAULT_DELIVERY_PROTOCOL_ID, payload).await
+        self.send_to(target, DEFAULT_DELIVERY_PROTOCOL_ID, payload)
+            .await
     }
 }

@@ -3,11 +3,11 @@
 //! HTTP helpers for the Kubo `/api/v0/` endpoints: data add/cat, DAG
 //! put/get, IPNS name publish/resolve, key management, and pinning.
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use did_ma::{Did, Document};
 use reqwest::multipart;
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
@@ -171,7 +171,9 @@ pub async fn wait_for_api(kubo_url: &str, attempts: u32) -> Result<()> {
     Err(anyhow!(
         "kubo API not ready after {} attempts: {}",
         attempts,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown error".to_string())
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
     ))
 }
 
@@ -284,8 +286,14 @@ pub async fn dag_get<T: DeserializeOwned>(kubo_url: &str, cid: &str) -> Result<T
         .text()
         .await?;
 
-    serde_json::from_str::<T>(&body)
-        .map_err(|e| anyhow!("failed parsing dag/get response for {}: {} body={}", cid, e, body))
+    serde_json::from_str::<T>(&body).map_err(|e| {
+        anyhow!(
+            "failed parsing dag/get response for {}: {} body={}",
+            cid,
+            e,
+            body
+        )
+    })
 }
 
 // ─── Name publish / resolve ─────────────────────────────────────────────────
@@ -320,18 +328,22 @@ pub async fn name_publish_with_options(
         .timeout(options.timeout)
         .build()?;
 
-    let allow_offline = if options.allow_offline { "true" } else { "false" };
+    let allow_offline = if options.allow_offline {
+        "true"
+    } else {
+        "false"
+    };
     let resolve = if options.resolve { "true" } else { "false" };
     let quieter = if options.quieter { "true" } else { "false" };
 
     let mut params: Vec<(&str, &str)> = vec![
-            ("arg", arg.as_str()),
-            ("key", key_name),
-            ("allow-offline", allow_offline),
-            ("lifetime", options.lifetime.as_str()),
-            ("resolve", resolve),
-            ("quieter", quieter),
-        ];
+        ("arg", arg.as_str()),
+        ("key", key_name),
+        ("allow-offline", allow_offline),
+        ("lifetime", options.lifetime.as_str()),
+        ("resolve", resolve),
+        ("quieter", quieter),
+    ];
     if let Some(ref ttl) = options.ttl {
         params.push(("ttl", ttl.as_str()));
     }
@@ -401,7 +413,9 @@ pub async fn name_publish_with_retry(
     Err(anyhow!(
         "name publish failed after {} attempt(s): {}",
         attempts,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown error".to_string())
+        last_err
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown error".to_string())
     ))
 }
 
@@ -417,7 +431,9 @@ async fn verify_name_target_after_error(
     }
     Err(anyhow!(
         "post-error resolve mismatch for key '{}': expected '{}' got '{}'",
-        key_name, expected, resolved
+        key_name,
+        expected,
+        resolved
     ))
 }
 
@@ -463,17 +479,25 @@ pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
     for attempt in 1..=4 {
         // DID documents are stored as DAG-CBOR via dag/put.
         match dag_get::<Document>(kubo_url, &ipns_path).await {
-            Ok(doc) => { document = Some(doc); break; }
+            Ok(doc) => {
+                document = Some(doc);
+                break;
+            }
             Err(dag_err) => {
                 // Fallback: resolve IPNS manually then dag_get the CID.
                 match name_resolve(kubo_url, &ipns_path, true).await {
                     Ok(resolved_path) => {
                         match dag_get::<Document>(kubo_url, &resolved_path).await {
-                            Ok(doc) => { document = Some(doc); break; }
+                            Ok(doc) => {
+                                document = Some(doc);
+                                break;
+                            }
                             Err(err) => {
                                 last_err = Some(anyhow!(
                                     "dag_get failed for {}: direct={} resolved={}",
-                                    ipns_path, dag_err, err
+                                    ipns_path,
+                                    dag_err,
+                                    err
                                 ));
                             }
                         }
@@ -481,7 +505,9 @@ pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
                     Err(resolve_err) => {
                         last_err = Some(anyhow!(
                             "dag_get and name/resolve both failed for {}: dag={} resolve={}",
-                            ipns_path, dag_err, resolve_err
+                            ipns_path,
+                            dag_err,
+                            resolve_err
                         ));
                         if !should_retry_name_resolve_error(&resolve_err) {
                             break;
@@ -498,11 +524,16 @@ pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
         }
     }
 
-    let document = document.ok_or_else(|| anyhow!(
-        "failed to fetch DID document for {} via {} after retries: {}",
-        did.id(), ipns_path,
-        last_err.map(|e| e.to_string()).unwrap_or_else(|| "unknown error".to_string())
-    ))?;
+    let document = document.ok_or_else(|| {
+        anyhow!(
+            "failed to fetch DID document for {} via {} after retries: {}",
+            did.id(),
+            ipns_path,
+            last_err
+                .map(|e| e.to_string())
+                .unwrap_or_else(|| "unknown error".to_string())
+        )
+    })?;
 
     document.validate()?;
     document.verify()?;
@@ -512,7 +543,8 @@ pub async fn fetch_did_document(kubo_url: &str, did: &Did) -> Result<Document> {
     if doc_did.ipns != did.ipns {
         return Err(anyhow!(
             "DID document IPNS mismatch: expected {} but document id is {}",
-            did.base_id(), document.id
+            did.base_id(),
+            document.id
         ));
     }
 
@@ -659,7 +691,11 @@ pub async fn list_keys(kubo_url: &str) -> Result<Vec<KuboKey>> {
             } else {
                 k.id_lower.trim().to_string()
             };
-            if name.is_empty() { None } else { Some(KuboKey { name, id }) }
+            if name.is_empty() {
+                None
+            } else {
+                Some(KuboKey { name, id })
+            }
         })
         .collect())
 }
@@ -682,12 +718,18 @@ mod tests {
 
     #[test]
     fn normalize_ipfs_arg_from_prefixed_path() {
-        assert_eq!(normalize_ipfs_arg("/ipfs/QmExampleCid"), "/ipfs/QmExampleCid");
+        assert_eq!(
+            normalize_ipfs_arg("/ipfs/QmExampleCid"),
+            "/ipfs/QmExampleCid"
+        );
     }
 
     #[test]
     fn normalize_ipfs_arg_from_double_prefixed_path() {
-        assert_eq!(normalize_ipfs_arg("/ipfs//ipfs/QmExampleCid"), "/ipfs/QmExampleCid");
+        assert_eq!(
+            normalize_ipfs_arg("/ipfs//ipfs/QmExampleCid"),
+            "/ipfs/QmExampleCid"
+        );
     }
 
     #[test]
@@ -708,7 +750,8 @@ mod tests {
 
     #[test]
     fn retries_network_errors() {
-        let err = anyhow!("error sending request for url (http://127.0.0.1:5001/api/v0/name/resolve)");
+        let err =
+            anyhow!("error sending request for url (http://127.0.0.1:5001/api/v0/name/resolve)");
         assert!(should_retry_name_resolve_error(&err));
     }
 }

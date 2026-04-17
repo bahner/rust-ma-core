@@ -46,15 +46,15 @@ impl DidResolver for GatewayResolver {
         let parsed = did_ma::Did::try_from(did).map_err(crate::error::Error::Validation)?;
         let url = format!("{}ipns/{}", self.gateway_url, parsed.ipns);
 
-        let response = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| crate::error::Error::Resolution {
-                did: did.to_string(),
-                detail: e.to_string(),
-            })?;
+        let response =
+            self.client
+                .get(&url)
+                .send()
+                .await
+                .map_err(|e| crate::error::Error::Resolution {
+                    did: did.to_string(),
+                    detail: e.to_string(),
+                })?;
 
         if !response.status().is_success() {
             return Err(crate::error::Error::Resolution {

@@ -12,8 +12,8 @@
 //! outbox.close();
 //! ```
 
-use crate::iroh::channel::Channel;
 use crate::error::Result;
+use crate::iroh::channel::Channel;
 
 /// A transport-agnostic write handle to a remote service.
 ///

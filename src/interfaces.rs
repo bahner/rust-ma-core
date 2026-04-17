@@ -6,7 +6,11 @@
 pub trait DidPublisher {
     type Error;
 
-    fn publish_did_document(&self, actor_id: &str, document_json: &str) -> Result<String, Self::Error>;
+    fn publish_did_document(
+        &self,
+        actor_id: &str,
+        document_json: &str,
+    ) -> Result<String, Self::Error>;
 }
 
 pub trait IpfsPublisher {

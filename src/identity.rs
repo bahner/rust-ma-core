@@ -45,8 +45,9 @@ pub fn generate_secret_key_file(path: &Path) -> Result<[u8; 32]> {
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::SecretKey(format!("failed to create dir {}: {}", parent.display(), e)))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            Error::SecretKey(format!("failed to create dir {}: {}", parent.display(), e))
+        })?;
     }
 
     fs::write(path, key_bytes)
@@ -87,7 +88,10 @@ mod tests {
     #[test]
     fn multiaddr_ipv4() {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4433);
-        assert_eq!(socket_addr_to_multiaddr(&addr), "/ip4/127.0.0.1/udp/4433/quic-v1");
+        assert_eq!(
+            socket_addr_to_multiaddr(&addr),
+            "/ip4/127.0.0.1/udp/4433/quic-v1"
+        );
     }
 
     #[test]

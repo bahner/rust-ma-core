@@ -36,14 +36,14 @@
 
 #![forbid(unsafe_code)]
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
-pub mod iroh;
 pub mod endpoint;
 pub mod error;
 pub mod identity;
 pub mod inbox;
 pub mod interfaces;
 pub mod ipfs_publish;
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+pub mod iroh;
 #[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub mod outbox;
 #[cfg(not(target_arch = "wasm32"))]
@@ -59,9 +59,9 @@ pub mod pinning;
 // ─── Re-export did-ma types so users don't need a separate dependency ───────
 
 pub use did_ma::{
-    Did, Document, EncryptionKey, Headers, MaError, Message, Proof,
-    ReplayGuard, SigningKey, VerificationMethod,
-    DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS, DEFAULT_REPLAY_WINDOW_SECS,
+    Did, Document, EncryptionKey, Headers, MaError, Message, Proof, ReplayGuard, SigningKey,
+    VerificationMethod, DEFAULT_MAX_CLOCK_SKEW_SECS, DEFAULT_MESSAGE_TTL_SECS,
+    DEFAULT_REPLAY_WINDOW_SECS,
 };
 
 // ─── Re-export core error type ──────────────────────────────────────────────
@@ -71,12 +71,9 @@ pub use error::{Error, Result};
 // ─── Re-export service constants ────────────────────────────────────────────
 
 pub use service::{
-    Service,
-    BROADCAST_PROTOCOL, BROADCAST_TOPIC,
-    INBOX_PROTOCOL, IPFS_PROTOCOL,
-    CONTENT_TYPE_BROADCAST, CONTENT_TYPE_CHAT, CONTENT_TYPE_EVENT,
-    CONTENT_TYPE_MESSAGE, CONTENT_TYPE_PRESENCE, CONTENT_TYPE_WHISPER,
-    CONTENT_TYPE_WORLD, DEFAULT_CONTENT_TYPE,
+    Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST, CONTENT_TYPE_CHAT,
+    CONTENT_TYPE_EVENT, CONTENT_TYPE_MESSAGE, CONTENT_TYPE_PRESENCE, CONTENT_TYPE_WHISPER,
+    CONTENT_TYPE_WORLD, DEFAULT_CONTENT_TYPE, INBOX_PROTOCOL, IPFS_PROTOCOL,
 };
 
 // ─── Re-export TtlQueue ─────────────────────────────────────────────────────
@@ -91,18 +88,18 @@ pub use inbox::Inbox;
 
 pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
 #[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
-pub use iroh::IrohEndpoint;
-#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub use iroh::channel::Channel;
+#[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
+pub use iroh::IrohEndpoint;
 #[cfg(all(not(target_arch = "wasm32"), feature = "iroh"))]
 pub use outbox::Outbox;
 
 // ─── Re-export transport parsing ────────────────────────────────────────────
 
 pub use transport::{
-    endpoint_id_from_transport, endpoint_id_from_transport_value,
-    normalize_endpoint_id, protocol_from_transport, resolve_endpoint_for_protocol,
-    resolve_inbox_endpoint_id, transport_string,
+    endpoint_id_from_transport, endpoint_id_from_transport_value, normalize_endpoint_id,
+    protocol_from_transport, resolve_endpoint_for_protocol, resolve_inbox_endpoint_id,
+    transport_string,
 };
 
 // ─── Re-export identity helpers ─────────────────────────────────────────────
@@ -117,14 +114,14 @@ pub use resolve::{DidResolver, GatewayResolver};
 // ─── Re-export existing modules ─────────────────────────────────────────────
 
 pub use interfaces::{DidPublisher, IpfsPublisher};
-pub use ipfs_publish::{
-    CONTENT_TYPE_DOC, IpfsPublishDidRequest, IpfsPublishDidResponse,
-    ValidatedIpfsPublish, validate_ipfs_publish_request,
-};
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use ipfs_publish::{handle_ipfs_publish, publish_did_document_to_kubo};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub use ipfs_publish::KuboDidPublisher;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+pub use ipfs_publish::{handle_ipfs_publish, publish_did_document_to_kubo};
+pub use ipfs_publish::{
+    validate_ipfs_publish_request, IpfsPublishDidRequest, IpfsPublishDidResponse,
+    ValidatedIpfsPublish, CONTENT_TYPE_DOC,
+};
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub use kubo::KuboKey;
-pub use pinning::{PinUpdateOutcome, pin_update_add_rm};
+pub use pinning::{pin_update_add_rm, PinUpdateOutcome};
