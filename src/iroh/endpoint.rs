@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MA_IROH_KEY: &str = "iroh";
-const MA_IROH_NODE_ID_KEY: &str = "endpoint_id";
+const MA_IROH_ENDPOINT_ID_KEY: &str = "endpoint_id";
 const MA_IROH_RELAY_URL_KEY: &str = "relay_url";
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
@@ -287,7 +287,10 @@ fn reconcile_document_ma_iroh_fields(
 
 fn ma_iroh_ipld(endpoint_id: String, relay_url: String) -> Ipld {
     let mut iroh = BTreeMap::new();
-    iroh.insert(MA_IROH_NODE_ID_KEY.to_string(), Ipld::String(endpoint_id));
+    iroh.insert(
+        MA_IROH_ENDPOINT_ID_KEY.to_string(),
+        Ipld::String(endpoint_id),
+    );
     iroh.insert(MA_IROH_RELAY_URL_KEY.to_string(), Ipld::String(relay_url));
     Ipld::Map(iroh)
 }
