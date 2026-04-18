@@ -21,9 +21,12 @@ jobs:
         with:
           script: |
             const sha = context.sha;
+            const ref = context.ref;
+            const tag = ref.replace("refs/tags/", "");
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const workflowName = "CI";
+            const workflowPath = ".github/workflows/ci.yaml";
 
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             const maxAttempts = 40;
@@ -38,11 +41,17 @@ jobs:
               });
 
               const ciRun = runs.find(
-                (r) => r.name === workflowName && r.head_sha === sha,
+                (r) =>
+                  r.name === workflowName &&
+                  r.path === workflowPath &&
+                  r.head_sha === sha &&
+                  r.head_branch === tag,
               );
 
               if (!ciRun) {
-                core.info(`Attempt ${i}/${maxAttempts}: CI run not found yet for ${sha}.`);
+                core.info(
+                  `Attempt ${i}/${maxAttempts}: tag CI run not found yet for ${ref} (${sha}).`,
+                );
                 await sleep(delayMs);
                 continue;
               }

@@ -13,8 +13,6 @@
 ///
 /// Accepts formats:
 /// - `/iroh/<endpoint-id>/<protocol>`
-/// - `/ma-iroh/<endpoint-id>/<protocol>` (legacy, accepted per Postel's law)
-/// - `/iroh+ma/<endpoint-id>/...`
 /// - bare 64-char hex endpoint ID
 pub fn endpoint_id_from_transport(input: &str) -> Option<String> {
     let value = input.trim();
@@ -22,14 +20,12 @@ pub fn endpoint_id_from_transport(input: &str) -> Option<String> {
         return None;
     }
 
-    for prefix in ["/ma-iroh/", "/iroh+ma/", "/iroh/"] {
-        if let Some(rest) = value.strip_prefix(prefix) {
-            let endpoint = rest.split('/').next().unwrap_or_default().trim();
-            if endpoint.is_empty() {
-                return None;
-            }
-            return normalize_endpoint_id(endpoint);
+    if let Some(rest) = value.strip_prefix("/iroh/") {
+        let endpoint = rest.split('/').next().unwrap_or_default().trim();
+        if endpoint.is_empty() {
+            return None;
         }
+        return normalize_endpoint_id(endpoint);
     }
 
     normalize_endpoint_id(value)
@@ -40,14 +36,12 @@ pub fn endpoint_id_from_transport(input: &str) -> Option<String> {
 /// For `/iroh/<endpoint-id>/ma/inbox/0.0.1` returns `Some("/ma/inbox/0.0.1")`.
 pub fn protocol_from_transport(input: &str) -> Option<String> {
     let value = input.trim();
-    for prefix in ["/ma-iroh/", "/iroh+ma/", "/iroh/"] {
-        if let Some(rest) = value.strip_prefix(prefix) {
-            // Skip the endpoint-id segment
-            if let Some(after_id) = rest.find('/') {
-                let protocol = &rest[after_id..];
-                if !protocol.is_empty() {
-                    return Some(protocol.to_string());
-                }
+    if let Some(rest) = value.strip_prefix("/iroh/") {
+        // Skip the endpoint-id segment
+        if let Some(after_id) = rest.find('/') {
+            let protocol = &rest[after_id..];
+            if !protocol.is_empty() {
+                return Some(protocol.to_string());
             }
         }
     }
@@ -188,30 +182,10 @@ mod tests {
     }
 
     #[test]
-    fn parse_legacy_ma_iroh_transport() {
-        // Postel's law: still accept /ma-iroh/ on input
-        let input = "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
-        let id = endpoint_id_from_transport(input).unwrap();
-        assert_eq!(
-            id,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        );
-    }
-
-    #[test]
     fn parse_protocol_from_transport() {
         let input =
             "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1";
         assert_eq!(protocol_from_transport(input).unwrap(), "/ma/inbox/0.0.1");
-    }
-
-    #[test]
-    fn parse_protocol_from_legacy_transport() {
-        let input = "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/presence/0.0.1";
-        assert_eq!(
-            protocol_from_transport(input).unwrap(),
-            "/ma/presence/0.0.1"
-        );
     }
 
     #[test]
@@ -242,19 +216,6 @@ mod tests {
     fn resolve_from_services_array() {
         let services = serde_json::json!([
             "/iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1"
-        ]);
-        let id = resolve_inbox_endpoint_id(Some(&services)).unwrap();
-        assert_eq!(
-            id,
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        );
-    }
-
-    #[test]
-    fn resolve_from_legacy_services_array() {
-        // Postel's law: still resolve /ma-iroh/ services
-        let services = serde_json::json!([
-            "/ma-iroh/0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef/ma/inbox/0.0.1"
         ]);
         let id = resolve_inbox_endpoint_id(Some(&services)).unwrap();
         assert_eq!(

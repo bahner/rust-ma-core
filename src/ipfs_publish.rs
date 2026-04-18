@@ -215,7 +215,9 @@ pub async fn publish_did_document_to_kubo(
         }
     } else {
         if ipns_private_key_base64.trim().is_empty() {
-            return Err(anyhow!("ipns_private_key_base64 is required when key is not present in Kubo"));
+            return Err(anyhow!(
+                "ipns_private_key_base64 is required when key is not present in Kubo"
+            ));
         }
 
         let key_bytes = B64
