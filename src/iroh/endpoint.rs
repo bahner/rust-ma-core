@@ -11,7 +11,13 @@ use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::resolve::DidResolver;
 use crate::transport::{resolve_endpoint_for_protocol, transport_string};
-use did_ma::Message;
+use did_ma::{Document, Ipld, Message, now_iso_utc};
+use std::collections::BTreeMap;
+
+const MA_IROH_KEY: &str = "iroh";
+const MA_IROH_NODE_ID_KEY: &str = "node_id";
+const MA_IROH_RELAY_URL_KEY: &str = "relay_url";
+const MA_IROH_DIRECT_ADDRESSES_KEY: &str = "direct_addresses";
 
 /// An iroh-backed ma endpoint.
 pub struct IrohEndpoint {
@@ -54,6 +60,36 @@ impl IrohEndpoint {
     /// The endpoint's typed iroh identifier.
     pub fn endpoint_id(&self) -> EndpointId {
         self.endpoint.id()
+    }
+
+    /// Reconcile `document.ma.iroh` from the live iroh endpoint state.
+    ///
+    /// Returns `Ok(true)` if the document was changed and should be re-published.
+    /// Returns `Ok(false)` when the existing value already matches live state.
+    pub fn reconcile_document_ma_iroh(&self, document: &mut Document) -> Result<bool> {
+        let node_id = self.endpoint.id().to_string();
+        let relay_url = self
+            .endpoint
+            .addr()
+            .relay_urls()
+            .map(|url| url.to_string())
+            .min()
+            .ok_or_else(|| {
+                Error::Transport("iroh endpoint has no relay URL available".to_string())
+            })?;
+        let direct_addresses = self
+            .endpoint
+            .addr()
+            .ip_addrs()
+            .map(|addr| addr.to_string())
+            .collect();
+
+        Ok(reconcile_document_ma_iroh_fields(
+            document,
+            node_id,
+            relay_url,
+            direct_addresses,
+        ))
     }
 
     /// Open a persistent write-only [`Channel`] to a remote endpoint.
@@ -123,6 +159,44 @@ impl IrohEndpoint {
     }
 }
 
+fn reconcile_document_ma_iroh_fields(
+    document: &mut Document,
+    node_id: String,
+    relay_url: String,
+    direct_addresses: Vec<String>,
+) -> bool {
+    let mut ma_root = match &document.ma {
+        Some(Ipld::Map(map)) => map.clone(),
+        _ => BTreeMap::new(),
+    };
+
+    let next = ma_iroh_ipld(node_id, relay_url, direct_addresses);
+    let unchanged = ma_root.get(MA_IROH_KEY) == Some(&next);
+    if unchanged {
+        return false;
+    }
+
+    ma_root.insert(MA_IROH_KEY.to_string(), next);
+    document.set_ma(Ipld::Map(ma_root));
+    document.updated_at = now_iso_utc();
+    true
+}
+
+fn ma_iroh_ipld(node_id: String, relay_url: String, direct_addresses: Vec<String>) -> Ipld {
+    let mut normalized_direct = direct_addresses;
+    normalized_direct.sort();
+    normalized_direct.dedup();
+
+    let mut iroh = BTreeMap::new();
+    iroh.insert(MA_IROH_NODE_ID_KEY.to_string(), Ipld::String(node_id));
+    iroh.insert(MA_IROH_RELAY_URL_KEY.to_string(), Ipld::String(relay_url));
+    iroh.insert(
+        MA_IROH_DIRECT_ADDRESSES_KEY.to_string(),
+        Ipld::List(normalized_direct.into_iter().map(Ipld::String).collect()),
+    );
+    Ipld::Map(iroh)
+}
+
 #[async_trait]
 impl MaEndpoint for IrohEndpoint {
     fn id(&self) -> String {
@@ -151,5 +225,102 @@ impl MaEndpoint for IrohEndpoint {
         channel.send(&cbor).await?;
         channel.close();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{reconcile_document_ma_iroh_fields, MA_IROH_DIRECT_ADDRESSES_KEY, MA_IROH_KEY};
+    use did_ma::{Did, Document, Ipld};
+    use std::collections::BTreeMap;
+
+    fn test_doc() -> Document {
+        let did = Did::new_url(
+            "k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr",
+            None::<String>,
+        )
+        .expect("valid did");
+        Document::new(&did, &did)
+    }
+
+    #[test]
+    fn reconcile_sets_ma_iroh() {
+        let mut doc = test_doc();
+
+        let changed = reconcile_document_ma_iroh_fields(
+            &mut doc,
+            "abc123".to_string(),
+            "https://relay.example".to_string(),
+            vec!["198.51.100.1:4001".to_string()],
+        );
+
+        assert!(changed);
+        let ma = doc.ma.expect("ma should be present");
+        let map = match ma {
+            Ipld::Map(map) => map,
+            _ => panic!("ma should be map"),
+        };
+        assert!(map.contains_key(MA_IROH_KEY));
+    }
+
+    #[test]
+    fn reconcile_is_idempotent_after_normalization() {
+        let mut doc = test_doc();
+        let _ = reconcile_document_ma_iroh_fields(
+            &mut doc,
+            "abc123".to_string(),
+            "https://relay.example".to_string(),
+            vec![
+                "203.0.113.1:4001".to_string(),
+                "198.51.100.1:4001".to_string(),
+                "198.51.100.1:4001".to_string(),
+            ],
+        );
+
+        let changed = reconcile_document_ma_iroh_fields(
+            &mut doc,
+            "abc123".to_string(),
+            "https://relay.example".to_string(),
+            vec![
+                "198.51.100.1:4001".to_string(),
+                "203.0.113.1:4001".to_string(),
+            ],
+        );
+
+        assert!(!changed);
+    }
+
+    #[test]
+    fn reconcile_preserves_other_ma_fields() {
+        let mut doc = test_doc();
+        let mut ma = BTreeMap::new();
+        ma.insert("services".to_string(), Ipld::Map(BTreeMap::new()));
+        doc.set_ma(Ipld::Map(ma));
+
+        let changed = reconcile_document_ma_iroh_fields(
+            &mut doc,
+            "abc123".to_string(),
+            "https://relay.example".to_string(),
+            vec!["203.0.113.1:4001".to_string()],
+        );
+
+        assert!(changed);
+        let ma = doc.ma.expect("ma should be present");
+        let map = match ma {
+            Ipld::Map(map) => map,
+            _ => panic!("ma should be map"),
+        };
+        assert!(map.contains_key("services"));
+        assert!(map.contains_key(MA_IROH_KEY));
+
+        let iroh = map.get(MA_IROH_KEY).expect("iroh should exist");
+        let iroh_map = match iroh {
+            Ipld::Map(iroh_map) => iroh_map,
+            _ => panic!("iroh should be map"),
+        };
+        let direct = iroh_map
+            .get(MA_IROH_DIRECT_ADDRESSES_KEY)
+            .expect("direct addresses should be present");
+        assert!(matches!(direct, Ipld::List(_)));
     }
 }
