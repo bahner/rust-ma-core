@@ -141,12 +141,7 @@ fn normalize_protocol(input: &str) -> String {
         return String::new();
     }
 
-    let mut out = String::new();
-    if !protocol.starts_with('/') {
-        out.push('/');
-    }
-    out.push_str(protocol.trim_start_matches('/'));
-    out
+    format!("/{}", protocol.trim_start_matches('/'))
 }
 
 /// Normalize an endpoint ID string: strip `/iroh/` prefix, validate hex format.
