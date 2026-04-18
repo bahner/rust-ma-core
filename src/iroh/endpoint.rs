@@ -1,8 +1,12 @@
 //! Iroh-backed [`MaEndpoint`] implementation.
 
 use async_trait::async_trait;
-use iroh::{endpoint::presets, Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
-use tracing::debug;
+use iroh::{
+    endpoint::{presets, Connection},
+    protocol::{AcceptError, ProtocolHandler, Router},
+    Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey,
+};
+use tracing::{debug, warn};
 
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
 use crate::error::{Error, Result};
@@ -13,15 +17,19 @@ use crate::resolve::DidResolver;
 use crate::transport::{resolve_endpoint_for_protocol, transport_string};
 use did_ma::{now_iso_utc, Document, Ipld, Message};
 use std::collections::BTreeMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const MA_IROH_KEY: &str = "iroh";
 const MA_IROH_NODE_ID_KEY: &str = "node_id";
 const MA_IROH_RELAY_URL_KEY: &str = "relay_url";
+const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// An iroh-backed ma endpoint.
 pub struct IrohEndpoint {
     endpoint: Endpoint,
     protocols: Vec<String>,
+    inboxes: BTreeMap<String, Inbox<Message>>,
+    router: Option<Router>,
 }
 
 impl IrohEndpoint {
@@ -43,6 +51,8 @@ impl IrohEndpoint {
         Ok(Self {
             endpoint,
             protocols: Vec::new(),
+            inboxes: BTreeMap::new(),
+            router: None,
         })
     }
 
@@ -152,7 +162,56 @@ impl IrohEndpoint {
 
     /// Shut down the endpoint.
     pub async fn close(self) {
+        if let Some(router) = self.router {
+            let _ = router.shutdown().await;
+            return;
+        }
         self.endpoint.close().await;
+    }
+
+    /// Start the inbound router for all registered services.
+    pub fn start_router(&mut self) {
+        if self.router.is_some() {
+            return;
+        }
+
+        let mut builder = Router::builder(self.endpoint.clone());
+        for protocol in &self.protocols {
+            if let Some(inbox) = self.inboxes.get(protocol) {
+                let handler = InboxProtocolHandler::new(protocol.clone(), inbox.clone());
+                builder = builder.accept(protocol.as_bytes(), handler);
+            }
+        }
+
+        self.router = Some(builder.spawn());
+    }
+
+    /// Remove a registered service protocol.
+    ///
+    /// Returns `true` when a service existed and was removed.
+    /// If the router is already running, it is reloaded so ALPN handlers
+    /// match the updated service set.
+    pub fn remove_service(&mut self, protocol: &str) -> bool {
+        let normalized = normalize_protocol(protocol);
+        let removed = self.inboxes.remove(&normalized).is_some();
+        if !removed {
+            return false;
+        }
+
+        self.protocols.retain(|p| p != &normalized);
+        self.reload_router_if_running();
+        true
+    }
+
+    fn reload_router_if_running(&mut self) {
+        if self.router.is_none() {
+            return;
+        }
+
+        // Dropping `Router` aborts the old accept loop quickly; we then spawn
+        // a new one with an updated protocol map.
+        self.router.take();
+        self.start_router();
     }
 
     fn resolve_addr_with_route(
@@ -238,10 +297,18 @@ impl MaEndpoint for IrohEndpoint {
     }
 
     fn service(&mut self, protocol: &str) -> Inbox<Message> {
-        if !self.protocols.contains(&protocol.to_string()) {
-            self.protocols.push(protocol.to_string());
+        let normalized = normalize_protocol(protocol);
+        if !self.protocols.contains(&normalized) {
+            self.protocols.push(normalized.clone());
         }
-        Inbox::new(DEFAULT_INBOX_CAPACITY)
+        if let Some(existing) = self.inboxes.get(&normalized) {
+            return existing.clone();
+        }
+
+        let inbox = Inbox::new(DEFAULT_INBOX_CAPACITY);
+        self.inboxes.insert(normalized, inbox.clone());
+        self.reload_router_if_running();
+        inbox
     }
 
     fn services(&self) -> Vec<String> {
@@ -260,6 +327,107 @@ impl MaEndpoint for IrohEndpoint {
         channel.close();
         Ok(())
     }
+}
+
+#[derive(Debug, Clone)]
+struct InboxProtocolHandler {
+    protocol: String,
+    inbox: Inbox<Message>,
+    max_message_size: usize,
+}
+
+impl InboxProtocolHandler {
+    fn new(protocol: String, inbox: Inbox<Message>) -> Self {
+        Self {
+            protocol,
+            inbox,
+            max_message_size: DEFAULT_MAX_INBOUND_MESSAGE_SIZE,
+        }
+    }
+}
+
+impl ProtocolHandler for InboxProtocolHandler {
+    async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
+        loop {
+            let (mut send, mut recv) = match connection.accept_bi().await {
+                Ok(streams) => streams,
+                Err(err) => {
+                    debug!(
+                        protocol = %self.protocol,
+                        remote = %connection.remote_id(),
+                        error = %err,
+                        "inbound connection closed"
+                    );
+                    break;
+                }
+            };
+
+            let payload = match recv.read_to_end(self.max_message_size).await {
+                Ok(payload) => payload,
+                Err(err) => {
+                    warn!(
+                        protocol = %self.protocol,
+                        remote = %connection.remote_id(),
+                        error = %err,
+                        "failed to read inbound stream"
+                    );
+                    let _ = send.finish();
+                    continue;
+                }
+            };
+
+            let _ = send.finish();
+
+            let message = match Message::from_cbor(&payload) {
+                Ok(message) => message,
+                Err(err) => {
+                    warn!(
+                        protocol = %self.protocol,
+                        remote = %connection.remote_id(),
+                        error = %err,
+                        "invalid inbound message payload"
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(err) = message.headers().validate() {
+                warn!(
+                    protocol = %self.protocol,
+                    remote = %connection.remote_id(),
+                    error = %err,
+                    "invalid inbound message headers"
+                );
+                continue;
+            }
+
+            let expires_at = if message.ttl == 0 {
+                0
+            } else {
+                message.created_at.saturating_add(message.ttl)
+            };
+
+            self.inbox.push(now_secs(), expires_at, message);
+        }
+
+        Ok(())
+    }
+}
+
+fn normalize_protocol(input: &str) -> String {
+    let protocol = input.trim();
+    if protocol.is_empty() {
+        return String::new();
+    }
+
+    format!("/{}", protocol.trim_start_matches('/'))
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before UNIX epoch")
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -367,5 +535,94 @@ mod tests {
         let ma = Ipld::Map(BTreeMap::new());
         let route = extract_ma_iroh_route(Some(&ma));
         assert!(route.is_none());
+    }
+
+    // ─── IrohEndpoint service/router lifecycle tests ─────────────────────────
+
+    fn test_secret() -> [u8; 32] {
+        let mut bytes = [0u8; 32];
+        bytes[0] = 42;
+        bytes
+    }
+
+    fn test_message() -> did_ma::Message {
+        use did_ma::{Did, SigningKey};
+        let did = Did::new_identity(
+            "k51qzi5uqu5dkkciu33khkzbcmxtyhn376i1e83tya8kuy7z9euedzyr5nhoew",
+        )
+        .expect("valid did");
+        let did_id = did.id();
+        let sk = SigningKey::generate(did).expect("signing key");
+        did_ma::Message::new(
+            did_id,
+            String::new(),
+            crate::service::CONTENT_TYPE_BROADCAST,
+            b"test".to_vec(),
+            &sk,
+        )
+        .expect("message")
+    }
+
+    // Requires network (iroh endpoint bind); run with `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn service_returns_shared_inbox() {
+        use crate::endpoint::MaEndpoint;
+        use super::IrohEndpoint;
+
+        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        let inbox_a = endpoint.service("/ma/inbox/0.0.1");
+        let inbox_b = endpoint.service("/ma/inbox/0.0.1");
+
+        // Both clones point to the same underlying queue.
+        inbox_a.push(0, 0, test_message());
+        assert_eq!(inbox_b.len(), 1, "cloned inbox should share the same queue");
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn remove_service_updates_protocol_list() {
+        use crate::endpoint::MaEndpoint;
+        use super::IrohEndpoint;
+
+        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        let _inbox = endpoint.service("/ma/custom/1.0");
+        assert!(endpoint.services().iter().any(|s| s.contains("/ma/custom/1.0")));
+
+        let removed = endpoint.remove_service("/ma/custom/1.0");
+        assert!(removed, "remove_service should return true for registered protocol");
+        assert!(
+            endpoint.services().iter().all(|s| !s.contains("/ma/custom/1.0")),
+            "protocol should be absent from services after removal"
+        );
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn service_after_start_router_triggers_reload() {
+        use crate::endpoint::MaEndpoint;
+        use super::IrohEndpoint;
+
+        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        endpoint.service("/ma/inbox/0.0.1");
+        endpoint.start_router();
+        assert!(endpoint.router.is_some(), "router should be running after start_router");
+
+        // Adding a new service while router is running should transparently reload.
+        endpoint.service("/ma/custom/1.0");
+        assert!(
+            endpoint.router.is_some(),
+            "router should still be running after service addition"
+        );
+        assert!(
+            endpoint.services().iter().any(|s| s.contains("/ma/custom/1.0")),
+            "new service should appear in services() after hot-add"
+        );
+
+        endpoint.close().await;
     }
 }
