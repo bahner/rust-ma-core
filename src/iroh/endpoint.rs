@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const MA_IROH_KEY: &str = "iroh";
-const MA_IROH_NODE_ID_KEY: &str = "node_id";
+const MA_IROH_NODE_ID_KEY: &str = "endpoint_id";
 const MA_IROH_RELAY_URL_KEY: &str = "relay_url";
 const DEFAULT_MAX_INBOUND_MESSAGE_SIZE: usize = 1024 * 1024;
 
@@ -76,7 +76,7 @@ impl IrohEndpoint {
     /// Returns `Ok(true)` if the document was changed and should be re-published.
     /// Returns `Ok(false)` when the existing value already matches live state.
     pub fn reconcile_document_ma_iroh(&self, document: &mut Document) -> Result<bool> {
-        let node_id = self.endpoint.id().to_string();
+        let endpoint_id = self.endpoint.id().to_string();
         let relay_url = self
             .endpoint
             .addr()
@@ -88,7 +88,9 @@ impl IrohEndpoint {
             })?;
 
         Ok(reconcile_document_ma_iroh_fields(
-            document, node_id, relay_url,
+            document,
+            endpoint_id,
+            relay_url,
         ))
     }
 
@@ -263,7 +265,7 @@ fn extract_ma_iroh_route(ma: Option<&Ipld>) -> Option<MaIrohRoute> {
 
 fn reconcile_document_ma_iroh_fields(
     document: &mut Document,
-    node_id: String,
+    endpoint_id: String,
     relay_url: String,
 ) -> bool {
     let mut ma_root = match &document.ma {
@@ -271,7 +273,7 @@ fn reconcile_document_ma_iroh_fields(
         _ => BTreeMap::new(),
     };
 
-    let next = ma_iroh_ipld(node_id, relay_url);
+    let next = ma_iroh_ipld(endpoint_id, relay_url);
     let unchanged = ma_root.get(MA_IROH_KEY) == Some(&next);
     if unchanged {
         return false;
@@ -283,9 +285,9 @@ fn reconcile_document_ma_iroh_fields(
     true
 }
 
-fn ma_iroh_ipld(node_id: String, relay_url: String) -> Ipld {
+fn ma_iroh_ipld(endpoint_id: String, relay_url: String) -> Ipld {
     let mut iroh = BTreeMap::new();
-    iroh.insert(MA_IROH_NODE_ID_KEY.to_string(), Ipld::String(node_id));
+    iroh.insert(MA_IROH_NODE_ID_KEY.to_string(), Ipld::String(endpoint_id));
     iroh.insert(MA_IROH_RELAY_URL_KEY.to_string(), Ipld::String(relay_url));
     Ipld::Map(iroh)
 }
@@ -547,10 +549,9 @@ mod tests {
 
     fn test_message() -> did_ma::Message {
         use did_ma::{Did, SigningKey};
-        let did = Did::new_identity(
-            "k51qzi5uqu5dkkciu33khkzbcmxtyhn376i1e83tya8kuy7z9euedzyr5nhoew",
-        )
-        .expect("valid did");
+        let did =
+            Did::new_identity("k51qzi5uqu5dkkciu33khkzbcmxtyhn376i1e83tya8kuy7z9euedzyr5nhoew")
+                .expect("valid did");
         let did_id = did.id();
         let sk = SigningKey::generate(did).expect("signing key");
         did_ma::Message::new(
@@ -567,8 +568,8 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn service_returns_shared_inbox() {
-        use crate::endpoint::MaEndpoint;
         use super::IrohEndpoint;
+        use crate::endpoint::MaEndpoint;
 
         let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
         let inbox_a = endpoint.service("/ma/inbox/0.0.1");
@@ -584,17 +585,26 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn remove_service_updates_protocol_list() {
-        use crate::endpoint::MaEndpoint;
         use super::IrohEndpoint;
+        use crate::endpoint::MaEndpoint;
 
         let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
         let _inbox = endpoint.service("/ma/custom/1.0");
-        assert!(endpoint.services().iter().any(|s| s.contains("/ma/custom/1.0")));
+        assert!(endpoint
+            .services()
+            .iter()
+            .any(|s| s.contains("/ma/custom/1.0")));
 
         let removed = endpoint.remove_service("/ma/custom/1.0");
-        assert!(removed, "remove_service should return true for registered protocol");
         assert!(
-            endpoint.services().iter().all(|s| !s.contains("/ma/custom/1.0")),
+            removed,
+            "remove_service should return true for registered protocol"
+        );
+        assert!(
+            endpoint
+                .services()
+                .iter()
+                .all(|s| !s.contains("/ma/custom/1.0")),
             "protocol should be absent from services after removal"
         );
 
@@ -604,13 +614,16 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn service_after_start_router_triggers_reload() {
-        use crate::endpoint::MaEndpoint;
         use super::IrohEndpoint;
+        use crate::endpoint::MaEndpoint;
 
         let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
         endpoint.service("/ma/inbox/0.0.1");
         endpoint.start_router();
-        assert!(endpoint.router.is_some(), "router should be running after start_router");
+        assert!(
+            endpoint.router.is_some(),
+            "router should be running after start_router"
+        );
 
         // Adding a new service while router is running should transparently reload.
         endpoint.service("/ma/custom/1.0");
@@ -619,7 +632,10 @@ mod tests {
             "router should still be running after service addition"
         );
         assert!(
-            endpoint.services().iter().any(|s| s.contains("/ma/custom/1.0")),
+            endpoint
+                .services()
+                .iter()
+                .any(|s| s.contains("/ma/custom/1.0")),
             "new service should appear in services() after hot-add"
         );
 
