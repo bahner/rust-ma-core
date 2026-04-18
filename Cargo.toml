@@ -12,8 +12,10 @@ keywords = ["did", "didcomm", "ipfs", "messaging"]
 categories = ["network-programming", "authentication"]
 
 [features]
-default = ["kubo"]
+default = ["iroh", "gossip"]
 kubo = []
+iroh = ["dep:iroh"]
+gossip = ["iroh", "dep:iroh-gossip"]
 
 [dependencies]
 anyhow = "1.0"
@@ -22,8 +24,8 @@ base64 = "0.22"
 blake3 = "1"
 bytes = "1.11.1"
 did-ma = { package = "ma-did", version = "0.4" }
-iroh = { version = "0.97.0" }
-iroh-gossip = { version = "0.97.0" }
+iroh = { version = "0.97.0", default-features = false, optional = true }
+iroh-gossip = { version = "0.97.0", default-features = false, features = ["net"], optional = true }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }

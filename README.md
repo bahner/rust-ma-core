@@ -70,14 +70,19 @@ IPNS publish/resolve, key management, pinning.
 
 | Feature | Default | Description |
 |---------|---------|-------------|
-| `kubo`  | yes     | Kubo RPC client for IPFS publishing |
-| `iroh`  | no      | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
+| `kubo`  | no      | Kubo RPC client for IPFS publishing |
+| `iroh`  | yes     | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
+| `gossip`| yes     | Iroh gossip helpers (`join_gossip_topic`, `gossip_send`, broadcast helpers) |
 
 ## Platform support
 
 Core types (`Inbox`, `Service`, transport parsing, validation)
-compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
-resolution, and iroh require a native target.
+compile on all targets including `wasm32-unknown-unknown`.
+
+- `kubo` APIs are native-only.
+- `GatewayResolver` is native-only.
+- `iroh` transport compiles on wasm and native.
+- `gossip` is optional and can be enabled when needed.
 
 ## Quick usage
 
@@ -199,6 +204,18 @@ pub async fn publish_with_readiness(
 ```bash
 cargo build
 cargo test
+```
+
+Wasm, slim iroh-only profile:
+
+```bash
+cargo check --target wasm32-unknown-unknown --no-default-features --features iroh
+```
+
+Wasm, iroh + gossip profile (when you need broadcast):
+
+```bash
+cargo check --target wasm32-unknown-unknown --no-default-features --features "iroh gossip"
 ```
 
 Run clippy when needed:

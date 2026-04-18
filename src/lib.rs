@@ -27,28 +27,28 @@
 //! - **`kubo`** (default) — enables Kubo RPC client for IPFS publishing.
 //! - **`iroh`** — enables the iroh QUIC transport backend ([`IrohEndpoint`],
 //!   [`Channel`], [`Outbox`]).
+//! - **`gossip`** — enables iroh-gossip broadcast helpers.
 //!
 //! ## Platform support
 //!
 //! Core types (`Inbox`, `Service`, transport parsing, validation)
 //! compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
-//! resolution, and iroh require a native target.
+//! publishing via Kubo requires a native target.
 
 #![forbid(unsafe_code)]
 
 pub mod endpoint;
 pub mod error;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "gossip")]
 pub mod gossip;
 pub mod identity;
 pub mod inbox;
 pub mod interfaces;
 pub mod ipfs_publish;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub mod iroh;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub mod outbox;
-#[cfg(not(target_arch = "wasm32"))]
 pub mod resolve;
 pub mod service;
 pub mod topic;
@@ -89,25 +89,25 @@ pub use topic::{topic_id, Topic, TopicId};
 // ─── Re-export endpoint trait and implementations ───────────────────────────
 
 pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub use iroh::channel::Channel;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub use iroh::IrohEndpoint;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub use outbox::Outbox;
 
 // ─── Re-export iroh primitives so dependents don't need a direct iroh dep ───
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub use ::iroh::endpoint::{presets, Connection, RecvStream, SendStream};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub use ::iroh::protocol::{AcceptError, ProtocolHandler, Router};
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "iroh")]
 pub use ::iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
 
 // ─── Re-export gossip helpers ────────────────────────────────────────────────
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "gossip")]
 pub use gossip::{
     broadcast_topic_id, gossip_send, gossip_send_text, join_broadcast_channel, join_gossip_topic,
     topic_id_for,
@@ -127,8 +127,9 @@ pub use identity::{generate_secret_key_file, load_secret_key_bytes, socket_addr_
 
 // ─── Re-export DID resolution ───────────────────────────────────────────────
 
+pub use resolve::DidResolver;
 #[cfg(not(target_arch = "wasm32"))]
-pub use resolve::{DidResolver, GatewayResolver};
+pub use resolve::GatewayResolver;
 
 // ─── Re-export existing modules ─────────────────────────────────────────────
 
