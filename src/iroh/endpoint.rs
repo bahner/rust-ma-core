@@ -81,9 +81,8 @@ impl IrohEndpoint {
         // DNS-based address lookup is not available in wasm_browser, so without
         // a relay hint the connect will time out. Both endpoints use the N0
         // preset whose relays interconnect, so any N0 relay URL is a valid hint.
-        for relay_url in self.endpoint.addr().relay_urls() {
+        if let Some(relay_url) = self.endpoint.addr().relay_urls().next() {
             addr = addr.with_relay_url(relay_url.clone());
-            break;
         }
         Ok(addr)
     }
