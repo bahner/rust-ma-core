@@ -169,7 +169,7 @@ pub fn normalize_endpoint_id(address: &str) -> Option<String> {
 ///
 /// Returns `/iroh/<endpoint-id><protocol>` where protocol starts with `/`.
 pub fn transport_string(endpoint_id: &str, protocol: &str) -> String {
-    format!("/iroh/{}{}", endpoint_id, protocol)
+    format!("/iroh/{}{}", endpoint_id, normalize_protocol(protocol))
 }
 
 #[cfg(test)]
@@ -311,6 +311,18 @@ mod tests {
         let s = transport_string(
             "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
             "/ma/inbox/0.0.1",
+        );
+        assert_eq!(
+            s,
+            "/iroh/abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234/ma/inbox/0.0.1"
+        );
+    }
+
+    #[test]
+    fn transport_string_normalizes_missing_leading_slash() {
+        let s = transport_string(
+            "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234",
+            "ma/inbox/0.0.1",
         );
         assert_eq!(
             s,

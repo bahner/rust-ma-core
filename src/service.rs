@@ -28,7 +28,8 @@ pub trait Service: Send + Sync {
 
 // ─── Well-known protocol constants (ma-core scope) ──────────────────────────
 
-pub const INBOX_PROTOCOL: &[u8] = b"/ma/inbox/0.0.1";
+pub const INBOX_PROTOCOL_ID: &str = "/ma/inbox/0.0.1";
+pub const INBOX_PROTOCOL: &[u8] = INBOX_PROTOCOL_ID.as_bytes();
 pub const BROADCAST_PROTOCOL: &[u8] = b"/ma/broadcast/0.0.1";
 pub const IPFS_PROTOCOL: &[u8] = b"/ma/ipfs/0.0.1";
 

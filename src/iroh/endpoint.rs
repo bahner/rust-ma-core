@@ -10,7 +10,7 @@ use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::resolve::DidResolver;
-use crate::transport::resolve_endpoint_for_protocol;
+use crate::transport::{resolve_endpoint_for_protocol, transport_string};
 use did_ma::Message;
 
 /// An iroh-backed ma endpoint.
@@ -137,10 +137,10 @@ impl MaEndpoint for IrohEndpoint {
     }
 
     fn services(&self) -> Vec<String> {
-        let id = self.endpoint.id();
+        let id = self.endpoint.id().to_string();
         self.protocols
             .iter()
-            .map(|proto| format!("/iroh/{}{}", id, proto))
+            .map(|proto| transport_string(&id, proto))
             .collect()
     }
 

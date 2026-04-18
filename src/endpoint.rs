@@ -7,13 +7,14 @@ use async_trait::async_trait;
 
 use crate::error::Result;
 use crate::inbox::Inbox;
+use crate::service::INBOX_PROTOCOL_ID;
 use did_ma::Message;
 
 /// Default inbox capacity for services.
 pub const DEFAULT_INBOX_CAPACITY: usize = 256;
 
 /// Default protocol ID for unqualified send/request calls.
-pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = "/ma/inbox/0.0.1";
+pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = INBOX_PROTOCOL_ID;
 
 /// Shared interface for ma transport endpoints.
 ///

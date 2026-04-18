@@ -18,7 +18,7 @@
 //!
 //! ## Services
 //!
-//! Every endpoint must provide `ma/inbox/0.0.1` (the default inbox).
+//! Every endpoint must provide `/ma/inbox/0.0.1` (the default inbox).
 //! Endpoints may optionally provide `ma/ipfs/0.0.1` to publish DID documents
 //! on behalf of others.
 //!
@@ -75,7 +75,8 @@ pub use error::{Error, Result};
 
 pub use service::{
     Service, BROADCAST_PROTOCOL, BROADCAST_TOPIC, CONTENT_TYPE_BROADCAST, CONTENT_TYPE_DOC,
-    CONTENT_TYPE_IPFS_REQUEST, CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL, IPFS_PROTOCOL,
+    CONTENT_TYPE_IPFS_REQUEST, CONTENT_TYPE_MESSAGE, INBOX_PROTOCOL, INBOX_PROTOCOL_ID,
+    IPFS_PROTOCOL,
 };
 
 // ─── Re-export Inbox ────────────────────────────────────────────────────────
