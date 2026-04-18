@@ -76,7 +76,16 @@ impl IrohEndpoint {
             .trim()
             .parse()
             .map_err(|e| Error::Transport(format!("invalid endpoint id: {e}")))?;
-        Ok(EndpointAddr::new(target_id))
+        let mut addr = EndpointAddr::new(target_id);
+        // Add our own relay URL as a routing hint.
+        // DNS-based address lookup is not available in wasm_browser, so without
+        // a relay hint the connect will time out. Both endpoints use the N0
+        // preset whose relays interconnect, so any N0 relay URL is a valid hint.
+        for relay_url in self.endpoint.addr().relay_urls() {
+            addr = addr.with_relay_url(relay_url.clone());
+            break;
+        }
+        Ok(addr)
     }
 
     /// Open a transport-agnostic [`Outbox`] to a remote DID on a given protocol.
