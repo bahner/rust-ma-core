@@ -1,7 +1,7 @@
 //! Iroh-backed [`MaEndpoint`] implementation.
 
 use async_trait::async_trait;
-use iroh::{endpoint::presets, Endpoint, EndpointAddr, EndpointId, SecretKey};
+use iroh::{endpoint::presets, Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
 use tracing::debug;
 
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
@@ -11,8 +11,9 @@ use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
 use crate::resolve::DidResolver;
 use crate::transport::{resolve_endpoint_for_protocol, transport_string};
-use did_ma::{Document, Ipld, Message, now_iso_utc};
+use did_ma::{now_iso_utc, Document, Ipld, Message};
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 
 const MA_IROH_KEY: &str = "iroh";
 const MA_IROH_NODE_ID_KEY: &str = "node_id";
@@ -95,6 +96,10 @@ impl IrohEndpoint {
     /// Open a persistent write-only [`Channel`] to a remote endpoint.
     pub async fn open(&self, target: &str, protocol: &str) -> Result<Channel> {
         let addr = self.resolve_addr(target)?;
+        self.open_addr(addr, protocol).await
+    }
+
+    async fn open_addr(&self, addr: EndpointAddr, protocol: &str) -> Result<Channel> {
         let connection = self
             .endpoint
             .connect(addr, protocol.as_bytes())
@@ -145,7 +150,10 @@ impl IrohEndpoint {
                 Error::NoInboxTransport(format!("{} has no service for {}", did, protocol,))
             })?;
 
-        let channel = self.open(&endpoint_id, protocol).await?;
+        let route = extract_ma_iroh_route(doc.ma.as_ref());
+        let addr = self.resolve_addr_with_route(&endpoint_id, route)?;
+
+        let channel = self.open_addr(addr, protocol).await?;
         Ok(Outbox::from_channel(
             channel,
             did.to_string(),
@@ -157,6 +165,70 @@ impl IrohEndpoint {
     pub async fn close(self) {
         self.endpoint.close().await;
     }
+
+    fn resolve_addr_with_route(
+        &self,
+        endpoint_id: &str,
+        route: Option<MaIrohRoute>,
+    ) -> Result<EndpointAddr> {
+        let target_id: EndpointId = endpoint_id
+            .trim()
+            .parse()
+            .map_err(|e| Error::Transport(format!("invalid endpoint id: {e}")))?;
+
+        let mut addr = EndpointAddr::new(target_id);
+
+        if let Some(route) = route {
+            if let Some(relay_url) = route.relay_url {
+                addr = addr.with_relay_url(relay_url);
+            }
+            for direct_addr in route.direct_addresses {
+                addr = addr.with_ip_addr(direct_addr);
+            }
+        }
+
+        // Fallback to local relay hint if remote route did not provide one.
+        if addr.relay_urls().next().is_none() {
+            if let Some(relay_url) = self.endpoint.addr().relay_urls().next() {
+                addr = addr.with_relay_url(relay_url.clone());
+            }
+        }
+
+        Ok(addr)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct MaIrohRoute {
+    relay_url: Option<RelayUrl>,
+    direct_addresses: Vec<SocketAddr>,
+}
+
+fn extract_ma_iroh_route(ma: Option<&Ipld>) -> Option<MaIrohRoute> {
+    let iroh = ma.and_then(|ma_root| ma_root.get(MA_IROH_KEY).ok().flatten())?;
+    let iroh_json = serde_json::to_value(iroh).ok()?;
+    let iroh_obj = iroh_json.as_object()?;
+
+    let relay_url = iroh_obj
+        .get(MA_IROH_RELAY_URL_KEY)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<RelayUrl>().ok());
+
+    let direct_addresses = iroh_obj
+        .get(MA_IROH_DIRECT_ADDRESSES_KEY)
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .filter_map(|s| s.parse::<SocketAddr>().ok())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    Some(MaIrohRoute {
+        relay_url,
+        direct_addresses,
+    })
 }
 
 fn reconcile_document_ma_iroh_fields(
@@ -230,7 +302,10 @@ impl MaEndpoint for IrohEndpoint {
 
 #[cfg(test)]
 mod tests {
-    use super::{reconcile_document_ma_iroh_fields, MA_IROH_DIRECT_ADDRESSES_KEY, MA_IROH_KEY};
+    use super::{
+        extract_ma_iroh_route, reconcile_document_ma_iroh_fields, MA_IROH_DIRECT_ADDRESSES_KEY,
+        MA_IROH_KEY, MA_IROH_RELAY_URL_KEY,
+    };
     use did_ma::{Did, Document, Ipld};
     use std::collections::BTreeMap;
 
@@ -322,5 +397,36 @@ mod tests {
             .get(MA_IROH_DIRECT_ADDRESSES_KEY)
             .expect("direct addresses should be present");
         assert!(matches!(direct, Ipld::List(_)));
+    }
+
+    #[test]
+    fn extract_ma_iroh_route_parses_relay_and_direct_addresses() {
+        let mut iroh = BTreeMap::new();
+        iroh.insert(
+            MA_IROH_RELAY_URL_KEY.to_string(),
+            Ipld::String("https://relay.example".to_string()),
+        );
+        iroh.insert(
+            MA_IROH_DIRECT_ADDRESSES_KEY.to_string(),
+            Ipld::List(vec![
+                Ipld::String("127.0.0.1:7000".to_string()),
+                Ipld::String("invalid-address".to_string()),
+                Ipld::String("192.0.2.10:7777".to_string()),
+            ]),
+        );
+
+        let mut ma = BTreeMap::new();
+        ma.insert(MA_IROH_KEY.to_string(), Ipld::Map(iroh));
+
+        let route = extract_ma_iroh_route(Some(&Ipld::Map(ma))).expect("route should parse");
+        assert!(route.relay_url.is_some());
+        assert_eq!(route.direct_addresses.len(), 2);
+    }
+
+    #[test]
+    fn extract_ma_iroh_route_returns_none_without_iroh() {
+        let ma = Ipld::Map(BTreeMap::new());
+        let route = extract_ma_iroh_route(Some(&ma));
+        assert!(route.is_none());
     }
 }
