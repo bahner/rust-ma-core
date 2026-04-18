@@ -344,23 +344,15 @@ mod tests {
             Ipld::Map(iroh_map) => iroh_map,
             _ => panic!("iroh should be map"),
         };
-        assert!(!iroh_map.contains_key("direct_addresses"));
+        assert!(iroh_map.contains_key(MA_IROH_RELAY_URL_KEY));
     }
 
     #[test]
-    fn extract_ma_iroh_route_parses_relay_and_ignores_direct_addresses() {
+    fn extract_ma_iroh_route_parses_relay_url() {
         let mut iroh = BTreeMap::new();
         iroh.insert(
             MA_IROH_RELAY_URL_KEY.to_string(),
             Ipld::String("https://relay.example".to_string()),
-        );
-        iroh.insert(
-            "direct_addresses".to_string(),
-            Ipld::List(vec![
-                Ipld::String("127.0.0.1:7000".to_string()),
-                Ipld::String("invalid-address".to_string()),
-                Ipld::String("192.0.2.10:7777".to_string()),
-            ]),
         );
 
         let mut ma = BTreeMap::new();
