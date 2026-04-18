@@ -13,12 +13,10 @@ use crate::resolve::DidResolver;
 use crate::transport::{resolve_endpoint_for_protocol, transport_string};
 use did_ma::{now_iso_utc, Document, Ipld, Message};
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 
 const MA_IROH_KEY: &str = "iroh";
 const MA_IROH_NODE_ID_KEY: &str = "node_id";
 const MA_IROH_RELAY_URL_KEY: &str = "relay_url";
-const MA_IROH_DIRECT_ADDRESSES_KEY: &str = "direct_addresses";
 
 /// An iroh-backed ma endpoint.
 pub struct IrohEndpoint {
@@ -78,18 +76,9 @@ impl IrohEndpoint {
             .ok_or_else(|| {
                 Error::Transport("iroh endpoint has no relay URL available".to_string())
             })?;
-        let direct_addresses = self
-            .endpoint
-            .addr()
-            .ip_addrs()
-            .map(|addr| addr.to_string())
-            .collect();
 
         Ok(reconcile_document_ma_iroh_fields(
-            document,
-            node_id,
-            relay_url,
-            direct_addresses,
+            document, node_id, relay_url,
         ))
     }
 
@@ -182,9 +171,6 @@ impl IrohEndpoint {
             if let Some(relay_url) = route.relay_url {
                 addr = addr.with_relay_url(relay_url);
             }
-            for direct_addr in route.direct_addresses {
-                addr = addr.with_ip_addr(direct_addr);
-            }
         }
 
         // Fallback to local relay hint if remote route did not provide one.
@@ -201,7 +187,6 @@ impl IrohEndpoint {
 #[derive(Debug, Clone)]
 struct MaIrohRoute {
     relay_url: Option<RelayUrl>,
-    direct_addresses: Vec<SocketAddr>,
 }
 
 fn extract_ma_iroh_route(ma: Option<&Ipld>) -> Option<MaIrohRoute> {
@@ -214,35 +199,20 @@ fn extract_ma_iroh_route(ma: Option<&Ipld>) -> Option<MaIrohRoute> {
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<RelayUrl>().ok());
 
-    let direct_addresses = iroh_obj
-        .get(MA_IROH_DIRECT_ADDRESSES_KEY)
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str())
-                .filter_map(|s| s.parse::<SocketAddr>().ok())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    Some(MaIrohRoute {
-        relay_url,
-        direct_addresses,
-    })
+    Some(MaIrohRoute { relay_url })
 }
 
 fn reconcile_document_ma_iroh_fields(
     document: &mut Document,
     node_id: String,
     relay_url: String,
-    direct_addresses: Vec<String>,
 ) -> bool {
     let mut ma_root = match &document.ma {
         Some(Ipld::Map(map)) => map.clone(),
         _ => BTreeMap::new(),
     };
 
-    let next = ma_iroh_ipld(node_id, relay_url, direct_addresses);
+    let next = ma_iroh_ipld(node_id, relay_url);
     let unchanged = ma_root.get(MA_IROH_KEY) == Some(&next);
     if unchanged {
         return false;
@@ -254,18 +224,10 @@ fn reconcile_document_ma_iroh_fields(
     true
 }
 
-fn ma_iroh_ipld(node_id: String, relay_url: String, direct_addresses: Vec<String>) -> Ipld {
-    let mut normalized_direct = direct_addresses;
-    normalized_direct.sort();
-    normalized_direct.dedup();
-
+fn ma_iroh_ipld(node_id: String, relay_url: String) -> Ipld {
     let mut iroh = BTreeMap::new();
     iroh.insert(MA_IROH_NODE_ID_KEY.to_string(), Ipld::String(node_id));
     iroh.insert(MA_IROH_RELAY_URL_KEY.to_string(), Ipld::String(relay_url));
-    iroh.insert(
-        MA_IROH_DIRECT_ADDRESSES_KEY.to_string(),
-        Ipld::List(normalized_direct.into_iter().map(Ipld::String).collect()),
-    );
     Ipld::Map(iroh)
 }
 
@@ -303,8 +265,8 @@ impl MaEndpoint for IrohEndpoint {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_ma_iroh_route, reconcile_document_ma_iroh_fields, MA_IROH_DIRECT_ADDRESSES_KEY,
-        MA_IROH_KEY, MA_IROH_RELAY_URL_KEY,
+        extract_ma_iroh_route, reconcile_document_ma_iroh_fields, MA_IROH_KEY,
+        MA_IROH_RELAY_URL_KEY,
     };
     use did_ma::{Did, Document, Ipld};
     use std::collections::BTreeMap;
@@ -326,7 +288,6 @@ mod tests {
             &mut doc,
             "abc123".to_string(),
             "https://relay.example".to_string(),
-            vec!["198.51.100.1:4001".to_string()],
         );
 
         assert!(changed);
@@ -345,21 +306,12 @@ mod tests {
             &mut doc,
             "abc123".to_string(),
             "https://relay.example".to_string(),
-            vec![
-                "203.0.113.1:4001".to_string(),
-                "198.51.100.1:4001".to_string(),
-                "198.51.100.1:4001".to_string(),
-            ],
         );
 
         let changed = reconcile_document_ma_iroh_fields(
             &mut doc,
             "abc123".to_string(),
             "https://relay.example".to_string(),
-            vec![
-                "198.51.100.1:4001".to_string(),
-                "203.0.113.1:4001".to_string(),
-            ],
         );
 
         assert!(!changed);
@@ -376,7 +328,6 @@ mod tests {
             &mut doc,
             "abc123".to_string(),
             "https://relay.example".to_string(),
-            vec!["203.0.113.1:4001".to_string()],
         );
 
         assert!(changed);
@@ -393,21 +344,18 @@ mod tests {
             Ipld::Map(iroh_map) => iroh_map,
             _ => panic!("iroh should be map"),
         };
-        let direct = iroh_map
-            .get(MA_IROH_DIRECT_ADDRESSES_KEY)
-            .expect("direct addresses should be present");
-        assert!(matches!(direct, Ipld::List(_)));
+        assert!(!iroh_map.contains_key("direct_addresses"));
     }
 
     #[test]
-    fn extract_ma_iroh_route_parses_relay_and_direct_addresses() {
+    fn extract_ma_iroh_route_parses_relay_and_ignores_direct_addresses() {
         let mut iroh = BTreeMap::new();
         iroh.insert(
             MA_IROH_RELAY_URL_KEY.to_string(),
             Ipld::String("https://relay.example".to_string()),
         );
         iroh.insert(
-            MA_IROH_DIRECT_ADDRESSES_KEY.to_string(),
+            "direct_addresses".to_string(),
             Ipld::List(vec![
                 Ipld::String("127.0.0.1:7000".to_string()),
                 Ipld::String("invalid-address".to_string()),
@@ -420,7 +368,6 @@ mod tests {
 
         let route = extract_ma_iroh_route(Some(&Ipld::Map(ma))).expect("route should parse");
         assert!(route.relay_url.is_some());
-        assert_eq!(route.direct_addresses.len(), 2);
     }
 
     #[test]

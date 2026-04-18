@@ -1,10 +1,18 @@
+---
 name: Release
 
+# Triggered automatically after CI completes successfully on a version tag.
+# Using workflow_run instead of push.tags avoids polling hacks and lets
+# GitHub's own orchestration handle the "CI must pass first" guarantee.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (e.g. v0.6.7)"
+        required: true
 
 permissions:
   actions: read
@@ -12,6 +20,14 @@ permissions:
 
 jobs:
   release:
+    # For workflow_run: only proceed when CI succeeded on a version tag.
+    # For workflow_dispatch: always proceed (manual override).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        startsWith(github.event.workflow_run.head_branch, 'v')
+      )
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -19,60 +35,18 @@ jobs:
       id-token: write
 
     steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.workflow_run.head_branch }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v5
-
-      - name: Wait for CI to pass for this commit
-        uses: actions/github-script@v7
         with:
-          script: |
-            const sha = context.sha;
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const workflowName = "CI";
-
-            const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-            const maxAttempts = 40;
-            const delayMs = 15000;
-
-            for (let i = 1; i <= maxAttempts; i++) {
-              const runs = await github.paginate(github.rest.actions.listWorkflowRunsForRepo, {
-                owner,
-                repo,
-                event: "push",
-                per_page: 100,
-              });
-
-              const ciRun = runs.find(
-                (r) =>
-                  r.name === workflowName &&
-                  r.head_sha === sha
-              );
-
-              if (!ciRun) {
-                core.info(`Attempt ${i}/${maxAttempts}: CI run not found yet for ${sha}.`);
-                await sleep(delayMs);
-                continue;
-              }
-
-              core.info(
-                `Attempt ${i}/${maxAttempts}: CI run ${ciRun.id} status=${ciRun.status} conclusion=${ciRun.conclusion}`
-              );
-
-              if (ciRun.status !== "completed") {
-                await sleep(delayMs);
-                continue;
-              }
-
-              if (ciRun.conclusion !== "success") {
-                core.setFailed(`CI workflow concluded with '${ciRun.conclusion}'. Aborting release.`);
-                return;
-              }
-
-              core.info("CI passed for this commit. Proceeding with release.");
-              return;
-            }
-
-            core.setFailed("Timed out waiting for CI workflow completion.");
+          ref: ${{ steps.tag.outputs.name }}
 
       - name: Install Rust
         run: rustup toolchain install stable
@@ -89,5 +63,6 @@ jobs:
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: ${{ steps.tag.outputs.name }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref, '-') }}
+          prerelease: ${{ contains(steps.tag.outputs.name, '-') }}
