@@ -8,6 +8,8 @@ use anyhow::{anyhow, Result};
 use did_ma::{Did, Document, Message};
 use serde::{Deserialize, Serialize};
 
+pub const MA_IPNS_ALIAS_HASH_PREFIX: &str = "ma-";
+
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use base64::engine::general_purpose::STANDARD as B64;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -203,7 +205,7 @@ pub async fn publish_did_document_to_kubo(
     // Deterministic key name derived from the DID IPNS identity.
     // Same DID always maps to the same Kubo key name — idempotent, no cleanup needed.
     let hash = blake3::hash(document_ipns_id.as_bytes());
-    let key_name = format!("_ma_{}", &hash.to_hex()[..16]);
+    let key_name = format!("{}{}", MA_IPNS_ALIAS_HASH_PREFIX, &hash.to_hex()[..16]);
 
     let imported = import_key(kubo_url, &key_name, key_bytes).await?;
     if imported.id.trim() != document_ipns_id {
