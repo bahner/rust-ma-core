@@ -94,17 +94,65 @@ pub fn resolve_endpoint_for_protocol(
     services: Option<&serde_json::Value>,
     target_protocol: &str,
 ) -> Option<String> {
-    let items = services?.as_array()?;
-    for item in items {
-        if let Some(s) = item.as_str() {
-            if let Some(protocol) = protocol_from_transport(s) {
-                if protocol == target_protocol {
-                    return endpoint_id_from_transport(s);
-                }
+    let target = normalize_protocol(target_protocol);
+    let value = services?;
+
+    if let Some(items) = value.as_array() {
+        for item in items {
+            if let Some(endpoint) = endpoint_for_service_item(item, &target) {
+                return Some(endpoint);
+            }
+        }
+        return None;
+    }
+
+    endpoint_for_service_item(value, &target)
+}
+
+fn endpoint_for_service_item(item: &serde_json::Value, target_protocol: &str) -> Option<String> {
+    if let Some(s) = item.as_str() {
+        let protocol = protocol_from_transport(s)?;
+        if normalize_protocol(&protocol) == target_protocol {
+            return endpoint_id_from_transport(s);
+        }
+        return None;
+    }
+
+    let map = item.as_object()?;
+
+    let protocol = map
+        .get("protocol")
+        .or_else(|| map.get("service"))
+        .or_else(|| map.get("alpn"))
+        .and_then(|v| v.as_str())?;
+
+    if normalize_protocol(protocol) != target_protocol {
+        return None;
+    }
+
+    for key in ["endpoint_id", "endpointId", "iroh", "address"] {
+        if let Some(serde_json::Value::String(s)) = map.get(key) {
+            if let Some(endpoint) = endpoint_id_from_transport(s) {
+                return Some(endpoint);
             }
         }
     }
+
     None
+}
+
+fn normalize_protocol(input: &str) -> String {
+    let protocol = input.trim();
+    if protocol.is_empty() {
+        return String::new();
+    }
+
+    let mut out = String::new();
+    if !protocol.starts_with('/') {
+        out.push('/');
+    }
+    out.push_str(protocol.trim_start_matches('/'));
+    out
 }
 
 /// Normalize an endpoint ID string: strip `/iroh/` prefix, validate hex format.
@@ -225,6 +273,36 @@ mod tests {
         assert_eq!(
             id,
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+    }
+
+    #[test]
+    fn resolve_endpoint_for_protocol_from_object() {
+        let services = serde_json::json!([
+            {
+                "protocol": "/ma/inbox/0.0.1",
+                "endpoint_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        ]);
+        let id = resolve_endpoint_for_protocol(Some(&services), "/ma/inbox/0.0.1").unwrap();
+        assert_eq!(
+            id,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    #[test]
+    fn resolve_endpoint_for_protocol_allows_missing_leading_slash() {
+        let services = serde_json::json!([
+            {
+                "protocol": "ma/inbox/0.0.1",
+                "endpoint_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        ]);
+        let id = resolve_endpoint_for_protocol(Some(&services), "/ma/inbox/0.0.1").unwrap();
+        assert_eq!(
+            id,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
     }
 

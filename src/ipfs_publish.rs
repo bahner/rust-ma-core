@@ -18,7 +18,7 @@ use base64::Engine;
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::kubo::{dag_put, import_key, name_publish_with_retry, IpnsPublishOptions};
+use crate::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
@@ -194,26 +194,42 @@ pub async fn publish_did_document_to_kubo(
         .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
     let document_ipns_id = document_did.ipns.clone();
 
-    if ipns_private_key_base64.trim().is_empty() {
-        return Err(anyhow!("ipns_private_key_base64 is required"));
-    }
-
-    let key_bytes = B64
-        .decode(ipns_private_key_base64.trim())
-        .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?;
-
     // Deterministic key name derived from the DID IPNS identity.
     // Same DID always maps to the same Kubo key name — idempotent, no cleanup needed.
     let hash = blake3::hash(document_ipns_id.as_bytes());
     let key_name = format!("{}{}", MA_IPNS_ALIAS_HASH_PREFIX, &hash.to_hex()[..16]);
 
-    let imported = import_key(kubo_url, &key_name, key_bytes).await?;
-    if imported.id.trim() != document_ipns_id {
-        return Err(anyhow!(
-            "imported key IPNS id '{}' does not match document DID IPNS '{}'",
-            imported.id,
-            document_ipns_id
-        ));
+    let existing_key = list_keys(kubo_url)
+        .await?
+        .into_iter()
+        .find(|k| k.name == key_name);
+
+    if let Some(existing) = existing_key {
+        if existing.id.trim() != document_ipns_id {
+            return Err(anyhow!(
+                "existing key '{}' has IPNS id '{}' but document DID IPNS is '{}'",
+                key_name,
+                existing.id,
+                document_ipns_id
+            ));
+        }
+    } else {
+        if ipns_private_key_base64.trim().is_empty() {
+            return Err(anyhow!("ipns_private_key_base64 is required when key is not present in Kubo"));
+        }
+
+        let key_bytes = B64
+            .decode(ipns_private_key_base64.trim())
+            .map_err(|e| anyhow!("invalid base64 key payload: {}", e))?;
+
+        let imported = import_key(kubo_url, &key_name, key_bytes).await?;
+        if imported.id.trim() != document_ipns_id {
+            return Err(anyhow!(
+                "imported key IPNS id '{}' does not match document DID IPNS '{}'",
+                imported.id,
+                document_ipns_id
+            ));
+        }
     }
 
     let document_cid = dag_put(kubo_url, &document).await?;
