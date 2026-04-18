@@ -7,13 +7,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: read
   contents: write
-  id-token: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
     steps:
       - uses: actions/checkout@v5
 
@@ -22,12 +24,9 @@ jobs:
         with:
           script: |
             const sha = context.sha;
-            const ref = context.ref;
-            const tag = ref.replace("refs/tags/", "");
             const owner = context.repo.owner;
             const repo = context.repo.repo;
             const workflowName = "CI";
-            const workflowPath = ".github/workflows/ci.yaml";
 
             const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
             const maxAttempts = 40;
@@ -44,20 +43,17 @@ jobs:
               const ciRun = runs.find(
                 (r) =>
                   r.name === workflowName &&
-                  r.path === workflowPath &&
-                  r.head_sha === sha,
+                  r.head_sha === sha
               );
 
               if (!ciRun) {
-                core.info(
-                  `Attempt ${i}/${maxAttempts}: CI run not found yet for ${ref} (${sha}).`,
-                );
+                core.info(`Attempt ${i}/${maxAttempts}: CI run not found yet for ${sha}.`);
                 await sleep(delayMs);
                 continue;
               }
 
               core.info(
-                `Attempt ${i}/${maxAttempts}: CI run ${ciRun.id} branch=${ciRun.head_branch} status=${ciRun.status} conclusion=${ciRun.conclusion}`,
+                `Attempt ${i}/${maxAttempts}: CI run ${ciRun.id} status=${ciRun.status} conclusion=${ciRun.conclusion}`
               );
 
               if (ciRun.status !== "completed") {
@@ -79,8 +75,9 @@ jobs:
       - name: Install Rust
         run: rustup toolchain install stable
 
-      - uses: rust-lang/crates-io-auth-action@v1.0.4
+      - name: Authenticate to crates.io with trusted publishing
         id: auth
+        uses: rust-lang/crates-io-auth-action@v1
 
       - name: Publish to crates.io
         run: cargo publish
