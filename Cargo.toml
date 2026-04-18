@@ -1,6 +1,6 @@
 [package]
 name = "ma-core"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 rust-version = "1.95"
 description = "DIDComm service library: inboxes, outboxes, DID document publishing, and transport abstraction"
