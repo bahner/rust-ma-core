@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   actions: read
@@ -44,20 +45,19 @@ jobs:
                 (r) =>
                   r.name === workflowName &&
                   r.path === workflowPath &&
-                  r.head_sha === sha &&
-                  r.head_branch === tag,
+                  r.head_sha === sha,
               );
 
               if (!ciRun) {
                 core.info(
-                  `Attempt ${i}/${maxAttempts}: tag CI run not found yet for ${ref} (${sha}).`,
+                  `Attempt ${i}/${maxAttempts}: CI run not found yet for ${ref} (${sha}).`,
                 );
                 await sleep(delayMs);
                 continue;
               }
 
               core.info(
-                `Attempt ${i}/${maxAttempts}: CI run ${ciRun.id} status=${ciRun.status} conclusion=${ciRun.conclusion}`,
+                `Attempt ${i}/${maxAttempts}: CI run ${ciRun.id} branch=${ciRun.head_branch} status=${ciRun.status} conclusion=${ciRun.conclusion}`,
               );
 
               if (ciRun.status !== "completed") {
