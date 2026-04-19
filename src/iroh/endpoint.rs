@@ -312,7 +312,11 @@ impl MaEndpoint for IrohEndpoint {
 
         let inbox = Inbox::new(DEFAULT_INBOX_CAPACITY);
         self.inboxes.insert(normalized, inbox.clone());
-        self.reload_router_if_running();
+        if self.router.is_some() {
+            self.reload_router_if_running();
+        } else {
+            self.start_router();
+        }
         inbox
     }
 
@@ -581,6 +585,25 @@ mod tests {
         // Both clones point to the same underlying queue.
         inbox_a.push(0, 0, test_message());
         assert_eq!(inbox_b.len(), 1, "cloned inbox should share the same queue");
+
+        endpoint.close().await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn service_auto_starts_router() {
+        use super::IrohEndpoint;
+        use crate::endpoint::MaEndpoint;
+
+        let mut endpoint = IrohEndpoint::new(test_secret()).await.unwrap();
+        assert!(endpoint.router.is_none(), "router should start stopped");
+
+        endpoint.service("/ma/inbox/0.0.1");
+
+        assert!(
+            endpoint.router.is_some(),
+            "router should auto-start on first service registration"
+        );
 
         endpoint.close().await;
     }

@@ -26,6 +26,10 @@ pub trait MaEndpoint: Send + Sync {
     fn id(&self) -> String;
 
     /// Register a service protocol and return an [`Inbox`] for receiving messages.
+    ///
+    /// Implementations should ensure the service is reachable for inbound delivery
+    /// once it has been registered, so callers do not need a second explicit
+    /// "listen" step in the common case.
     fn service(&mut self, protocol: &str) -> Inbox<Message>;
 
     /// Return service strings for all registered protocols.
