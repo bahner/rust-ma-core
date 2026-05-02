@@ -28,6 +28,10 @@
 //! - **`iroh`** — enables the iroh QUIC transport backend ([`IrohEndpoint`],
 //!   [`Channel`], [`Outbox`]).
 //! - **`gossip`** — enables iroh-gossip broadcast helpers.
+//! - **`config`** — enables [`Config`], [`SecretBundle`], and [`MaArgs`] for
+//!   YAML-based daemon configuration, encrypted secret bundles, and CLI
+//!   argument parsing. Not supported on `wasm32` — a compile error is emitted
+//!   if the feature is enabled on that target.
 //!
 //! ## Platform support
 //!
@@ -37,6 +41,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(all(feature = "config", not(target_arch = "wasm32")))]
+pub mod config;
 pub mod endpoint;
 pub mod error;
 #[cfg(feature = "gossip")]
@@ -125,6 +131,11 @@ pub use transport::{
 // ─── Re-export identity helpers ─────────────────────────────────────────────
 
 pub use identity::{generate_secret_key_file, load_secret_key_bytes, socket_addr_to_multiaddr};
+
+// ─── Re-export config types ──────────────────────────────────────────────────
+
+#[cfg(all(feature = "config", not(target_arch = "wasm32")))]
+pub use config::{Config, MaArgs, SecretBundle};
 
 // ─── Re-export DID resolution ───────────────────────────────────────────────
 

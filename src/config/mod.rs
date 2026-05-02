@@ -1,0 +1,521 @@
+//! Configuration for ma-core-based daemons.
+//!
+//! Provides [`Config`], a runtime configuration struct that is populated from
+//! (in decreasing priority):
+//!
+//! 1. Explicit CLI arguments (via [`MaArgs`])
+//! 2. `MA_<MA_DEFAULT_SLUG>_*` environment variables (slug-prefixed, set per binary)
+//! 3. `MA_*` environment variables (static fallback, shared across binaries)
+//! 4. YAML config file (`XDG_CONFIG_HOME/ma/<slug>.yaml`)
+//! 5. Built-in defaults
+//!
+//! # Compile-time constant requirement
+//!
+//! Every binary using this module **must** declare a compile-time constant:
+//!
+//! ```no_run
+//! const MA_DEFAULT_SLUG: &str = "panteia";
+//! ```
+//!
+//! This constant serves a dual purpose:
+//! - **Default slug** — used for file naming when `--slug` is not set.
+//! - **Env-var prefix** — uppercased to `MA_PANTEIA_*` for env-var lookup.
+//!   This prefix is fixed at compile time and cannot be changed at runtime.
+//!   Only file-naming can be overridden via `--slug`.
+
+#[cfg(target_arch = "wasm32")]
+compile_error!("the `config` feature is not supported on wasm32 targets");
+
+pub mod cli;
+mod logging;
+pub mod secrets;
+
+pub use cli::MaArgs;
+pub use secrets::SecretBundle;
+
+use std::path::{Path, PathBuf};
+
+use crate::error::{Error, Result};
+
+// ─── Defaults ────────────────────────────────────────────────────────────────
+
+const DEFAULT_LOG_LEVEL: &str = "info";
+const DEFAULT_LOG_LEVEL_STDOUT: &str = "warn";
+const DEFAULT_KUBO_RPC_URL: &str = "http://127.0.0.1:5001";
+
+// ─── Config struct ───────────────────────────────────────────────────────────
+
+/// Runtime configuration for a ma daemon.
+///
+/// Build via [`Config::from_args`] after parsing CLI arguments.
+#[derive(Debug, Clone)]
+pub struct Config {
+    /// Short printable slug identifying this daemon instance.
+    /// Used in default file names: `<slug>.yaml`, `<slug>.bin`, `<slug>.log`.
+    pub slug: String,
+
+    /// Log level written to the log file (e.g. `"info"`, `"debug"`).
+    pub log_level: String,
+
+    /// Log level written to stdout.
+    pub log_level_stdout: String,
+
+    /// Path to the log file. `None` → resolved to `XDG_DATA_HOME/ma/<slug>.log`
+    /// on first use.
+    pub log_file: Option<PathBuf>,
+
+    /// Kubo JSON-RPC API URL.
+    pub kubo_rpc_url: String,
+
+    /// IPNS key alias registered in Kubo for this daemon.
+    pub kubo_key_alias: String,
+
+    /// Path to the encrypted secret bundle. `None` → `XDG_CONFIG_HOME/ma/<slug>.bin`.
+    pub secret_bundle: Option<PathBuf>,
+
+    /// Passphrase to unlock the secret bundle.
+    /// In headless configs this is stored in cleartext in the YAML file.
+    pub secret_bundle_passphrase: Option<String>,
+
+    /// Path where this config was loaded from or will be saved to.
+    pub config_path: Option<PathBuf>,
+
+    /// Extra user-defined YAML keys that are not part of the core schema.
+    /// Preserved during load and save so callers can extend the config freely.
+    pub extra: serde_yaml::Mapping,
+}
+
+// ─── XDG path helpers ────────────────────────────────────────────────────────
+
+fn project_dirs() -> Result<directories::ProjectDirs> {
+    directories::ProjectDirs::from("", "ma", "ma")
+        .ok_or_else(|| Error::Config("cannot determine XDG base directories".to_string()))
+}
+
+/// Default YAML config path: `XDG_CONFIG_HOME/ma/<slug>.yaml`.
+pub fn default_config_path(slug: &str) -> Result<PathBuf> {
+    Ok(project_dirs()?.config_dir().join(format!("{slug}.yaml")))
+}
+
+/// Default secret bundle path: `XDG_CONFIG_HOME/ma/<slug>.bin`.
+pub fn default_secret_bundle_path(slug: &str) -> Result<PathBuf> {
+    Ok(project_dirs()?.config_dir().join(format!("{slug}.bin")))
+}
+
+/// Default log file path: `XDG_DATA_HOME/ma/<slug>.log`.
+pub fn default_log_file_path(slug: &str) -> Result<PathBuf> {
+    Ok(project_dirs()?.data_dir().join(format!("{slug}.log")))
+}
+
+// ─── Secure file I/O ─────────────────────────────────────────────────────────
+
+/// Write `data` to `path`, creating parent directories as needed.
+///
+/// On Unix the file is created (or truncated) with mode `0600`. On other
+/// platforms the file is written without special permission handling.
+pub(crate) fn write_secure(path: &Path, data: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            Error::Config(format!("failed to create dir {}: {e}", parent.display()))
+        })?;
+    }
+
+    #[cfg(unix)]
+    let mut file = {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| Error::Config(format!("failed to open {}: {e}", path.display())))?
+    };
+
+    #[cfg(not(unix))]
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .map_err(|e| Error::Config(format!("failed to open {}: {e}", path.display())))?;
+
+    file.write_all(data)
+        .map_err(|e| Error::Config(format!("failed to write {}: {e}", path.display())))?;
+
+    // Belt-and-suspenders: also set permissions after creation (handles the
+    // case where the file already existed with wider permissions).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| {
+            Error::Config(format!(
+                "failed to set permissions on {}: {e}",
+                path.display()
+            ))
+        })?;
+    }
+
+    Ok(())
+}
+
+/// Check that a file's permissions are not wider than `0600` and log a
+/// warning if they are. Only active on Unix.
+fn check_permissions(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata(path) {
+            let mode = meta.mode() & 0o777;
+            if mode > 0o600 {
+                tracing::warn!(
+                    path = %path.display(),
+                    mode = format!("{mode:04o}"),
+                    "config file has permissions wider than 0600 — consider `chmod 0600 {}`",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+// ─── YAML helpers ────────────────────────────────────────────────────────────
+
+fn load_yaml_mapping(path: &Path) -> Result<serde_yaml::Mapping> {
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
+    let val: serde_yaml::Value = serde_yaml::from_str(&content)
+        .map_err(|e| Error::Config(format!("invalid YAML in {}: {e}", path.display())))?;
+    if let serde_yaml::Value::Mapping(m) = val {
+        Ok(m)
+    } else {
+        Err(Error::Config(format!(
+            "config file {} must be a YAML mapping",
+            path.display()
+        )))
+    }
+}
+
+fn yaml_str(m: &serde_yaml::Mapping, key: &str) -> Option<String> {
+    m.get(serde_yaml::Value::String(key.to_string()))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+}
+
+fn yaml_path(m: &serde_yaml::Mapping, key: &str) -> Option<PathBuf> {
+    m.get(serde_yaml::Value::String(key.to_string()))
+        .and_then(|v| v.as_str())
+        .map(PathBuf::from)
+}
+
+// ─── Config impl ─────────────────────────────────────────────────────────────
+
+impl Config {
+    /// Build a `Config` by merging CLI arguments, environment variables, a
+    /// YAML config file, and built-in defaults.
+    ///
+    /// # Required compile-time constant
+    ///
+    /// Callers **MUST** pass a compile-time constant `MA_DEFAULT_SLUG: &'static str`.
+    /// This determines BOTH the default slug for file naming AND the fixed
+    /// env-var prefix `MA_<MA_DEFAULT_SLUG>_*`. The prefix cannot be changed
+    /// at runtime; only file naming may be overridden via `--slug`.
+    ///
+    /// ```
+    /// # #[cfg(all(feature = "config", not(target_arch = "wasm32")))]
+    /// # {
+    /// use ma_core::config::{Config, MaArgs};
+    /// let args = MaArgs::default();
+    /// let config = Config::from_args(&args, "doctest")?;
+    /// assert_eq!(config.slug, "doctest");
+    /// # }
+    /// # Ok::<(), ma_core::Error>(())
+    /// ```
+    ///
+    /// # Priority
+    ///
+    /// For each field the resolution order is:
+    /// 1. Explicit CLI argument
+    /// 2. `MA_<MA_DEFAULT_SLUG>_FIELD` environment variable
+    /// 3. `MA_FIELD` environment variable (static fallback)
+    /// 4. Value from the YAML config file
+    /// 5. Built-in default
+    pub fn from_args(args: &MaArgs, default_slug: &'static str) -> Result<Self> {
+        // The env-var prefix is determined by the compile-time constant.
+        // e.g. default_slug = "panteia"  →  prefix = "PANTEIA"
+        let prefix = default_slug.to_uppercase().replace('-', "_");
+
+        // Slug: CLI/env via clap (MA_SLUG) → compile-time default.
+        let slug = args
+            .slug
+            .clone()
+            .unwrap_or_else(|| default_slug.to_string());
+
+        // Config file path: explicit → slug-based XDG default.
+        let config_path = if let Some(ref p) = args.config {
+            p.clone()
+        } else {
+            default_config_path(&slug)?
+        };
+
+        // Load YAML if the file exists.
+        let yaml = if config_path.exists() {
+            check_permissions(&config_path);
+            Some(load_yaml_mapping(&config_path)?)
+        } else {
+            None
+        };
+
+        // Helper: resolve a string field through the priority chain.
+        // NOTE: closures borrow `yaml` and `prefix` immutably; NLL ensures
+        // the borrows end before we move `yaml` below.
+        let resolve_str = |cli: Option<String>, env_key: &str, default: &str| -> String {
+            cli.or_else(|| std::env::var(format!("MA_{prefix}_{env_key}")).ok())
+                .or_else(|| std::env::var(format!("MA_{env_key}")).ok())
+                .or_else(|| {
+                    yaml.as_ref()
+                        .and_then(|m| yaml_str(m, &env_key.to_lowercase()))
+                })
+                .unwrap_or_else(|| default.to_string())
+        };
+
+        let resolve_opt_str = |cli: Option<String>, env_key: &str| -> Option<String> {
+            cli.or_else(|| std::env::var(format!("MA_{prefix}_{env_key}")).ok())
+                .or_else(|| std::env::var(format!("MA_{env_key}")).ok())
+                .or_else(|| {
+                    yaml.as_ref()
+                        .and_then(|m| yaml_str(m, &env_key.to_lowercase()))
+                })
+        };
+
+        let resolve_opt_path = |cli: Option<PathBuf>, env_key: &str| -> Option<PathBuf> {
+            cli.or_else(|| {
+                std::env::var(format!("MA_{prefix}_{env_key}"))
+                    .ok()
+                    .map(PathBuf::from)
+            })
+            .or_else(|| {
+                std::env::var(format!("MA_{env_key}"))
+                    .ok()
+                    .map(PathBuf::from)
+            })
+            .or_else(|| {
+                yaml.as_ref()
+                    .and_then(|m| yaml_path(m, &env_key.to_lowercase()))
+            })
+        };
+
+        let log_level = resolve_str(args.log_level.clone(), "LOG_LEVEL", DEFAULT_LOG_LEVEL);
+        let log_level_stdout = resolve_str(
+            args.log_level_stdout.clone(),
+            "LOG_LEVEL_STDOUT",
+            DEFAULT_LOG_LEVEL_STDOUT,
+        );
+        let log_file = resolve_opt_path(args.log_file.clone(), "LOG_FILE");
+        let kubo_rpc_url = resolve_str(
+            args.kubo_rpc_url.clone(),
+            "KUBO_RPC_URL",
+            DEFAULT_KUBO_RPC_URL,
+        );
+        let kubo_key_alias =
+            resolve_str(args.kubo_key_alias.clone(), "KUBO_KEY_ALIAS", &slug.clone());
+        let secret_bundle = resolve_opt_path(args.secret_bundle.clone(), "SECRET_BUNDLE");
+        let secret_bundle_passphrase = resolve_opt_str(
+            args.secret_bundle_passphrase.clone(),
+            "SECRET_BUNDLE_PASSPHRASE",
+        );
+
+        // Extra: all YAML keys that are not part of the core schema.
+        let known: &[&str] = &[
+            "slug",
+            "log_level",
+            "log_level_stdout",
+            "log_file",
+            "kubo_rpc_url",
+            "kubo_key_alias",
+            "secret_bundle",
+            "secret_bundle_passphrase",
+        ];
+        let extra = yaml
+            .map(|mut m| {
+                for k in known {
+                    m.remove(serde_yaml::Value::String((*k).to_string()));
+                }
+                m
+            })
+            .unwrap_or_default();
+
+        Ok(Config {
+            slug,
+            log_level,
+            log_level_stdout,
+            log_file,
+            kubo_rpc_url,
+            kubo_key_alias,
+            secret_bundle,
+            secret_bundle_passphrase,
+            config_path: Some(config_path),
+            extra,
+        })
+    }
+
+    /// The effective log file path: `self.log_file` if set, otherwise the
+    /// XDG default `XDG_DATA_HOME/ma/<slug>.log`.
+    pub fn effective_log_file(&self) -> Result<PathBuf> {
+        if let Some(ref p) = self.log_file {
+            Ok(p.clone())
+        } else {
+            default_log_file_path(&self.slug)
+        }
+    }
+
+    /// The effective secret bundle path: `self.secret_bundle` if set,
+    /// otherwise the XDG default `XDG_CONFIG_HOME/ma/<slug>.bin`.
+    pub fn effective_secret_bundle(&self) -> Result<PathBuf> {
+        if let Some(ref p) = self.secret_bundle {
+            Ok(p.clone())
+        } else {
+            default_secret_bundle_path(&self.slug)
+        }
+    }
+
+    /// Save this config to [`Self::config_path`] as YAML with 0600
+    /// permissions. Returns an error if `config_path` is not set.
+    ///
+    /// Known fields are serialized explicitly; extra fields are merged in
+    /// afterwards so user-defined keys are preserved.
+    pub fn save(&self) -> Result<()> {
+        let path = self
+            .config_path
+            .as_ref()
+            .ok_or_else(|| Error::Config("cannot save config: no config_path set".to_string()))?;
+
+        let mut m = self.extra.clone();
+
+        let mut set = |k: &str, v: serde_yaml::Value| {
+            m.insert(serde_yaml::Value::String(k.to_string()), v);
+        };
+
+        set("slug", serde_yaml::Value::String(self.slug.clone()));
+        set(
+            "log_level",
+            serde_yaml::Value::String(self.log_level.clone()),
+        );
+        set(
+            "log_level_stdout",
+            serde_yaml::Value::String(self.log_level_stdout.clone()),
+        );
+        set(
+            "kubo_rpc_url",
+            serde_yaml::Value::String(self.kubo_rpc_url.clone()),
+        );
+        set(
+            "kubo_key_alias",
+            serde_yaml::Value::String(self.kubo_key_alias.clone()),
+        );
+
+        if let Some(ref p) = self.log_file {
+            set(
+                "log_file",
+                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
+            );
+        }
+        if let Some(ref p) = self.secret_bundle {
+            set(
+                "secret_bundle",
+                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
+            );
+        }
+        if let Some(ref pw) = self.secret_bundle_passphrase {
+            set(
+                "secret_bundle_passphrase",
+                serde_yaml::Value::String(pw.clone()),
+            );
+        }
+
+        let yaml_text = serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
+            .map_err(|e| Error::Config(format!("failed to serialize config: {e}")))?;
+
+        write_secure(path, yaml_text.as_bytes())
+    }
+
+    /// Generate a complete headless config:
+    ///
+    /// 1. Generate a fresh [`SecretBundle`] with four random 32-byte keys.
+    /// 2. Encrypt the bundle (using `args.secret_bundle_passphrase` or a
+    ///    freshly generated random passphrase).
+    /// 3. Write the encrypted bundle to `XDG_CONFIG_HOME/ma/<slug>.bin`
+    ///    (or the path from `--secret-bundle`) with mode 0600.
+    /// 4. Write the YAML config to `XDG_CONFIG_HOME/ma/<slug>.yaml`
+    ///    (or the path from `--config`) with the passphrase in cleartext and
+    ///    mode 0600.
+    /// 5. Print the paths of both files to stdout.
+    ///
+    /// Returns an error if either file already exists.
+    pub fn gen_headless(args: &MaArgs, default_slug: &'static str) -> Result<()> {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+
+        let slug = args.slug.as_deref().unwrap_or(default_slug).to_string();
+
+        let config_path = if let Some(ref p) = args.config {
+            p.clone()
+        } else {
+            default_config_path(&slug)?
+        };
+        let bundle_path = if let Some(ref p) = args.secret_bundle {
+            p.clone()
+        } else {
+            default_secret_bundle_path(&slug)?
+        };
+
+        if config_path.exists() {
+            return Err(Error::Config(format!(
+                "config file already exists: {} (remove it first or use --config)",
+                config_path.display()
+            )));
+        }
+        if bundle_path.exists() {
+            return Err(Error::Config(format!(
+                "secret bundle already exists: {} (remove it first or use --secret-bundle)",
+                bundle_path.display()
+            )));
+        }
+
+        // Generate or use provided passphrase.
+        let passphrase = if let Some(ref p) = args.secret_bundle_passphrase {
+            p.clone()
+        } else {
+            let mut bytes = [0u8; 32];
+            use rand::RngCore;
+            rand::rngs::OsRng.fill_bytes(&mut bytes);
+            STANDARD.encode(bytes)
+        };
+
+        // Generate and save the bundle.
+        let bundle = SecretBundle::generate();
+        bundle.save(&bundle_path, &passphrase)?;
+
+        // Build and save the config.
+        let config = Config {
+            slug: slug.clone(),
+            log_level: DEFAULT_LOG_LEVEL.to_string(),
+            log_level_stdout: DEFAULT_LOG_LEVEL_STDOUT.to_string(),
+            log_file: None,
+            kubo_rpc_url: DEFAULT_KUBO_RPC_URL.to_string(),
+            kubo_key_alias: slug.clone(),
+            secret_bundle: Some(bundle_path.clone()),
+            secret_bundle_passphrase: Some(passphrase),
+            config_path: Some(config_path.clone()),
+            extra: serde_yaml::Mapping::new(),
+        };
+        config.save()?;
+
+        println!("Config:        {}", config_path.display());
+        println!("Secret bundle: {}", bundle_path.display());
+
+        Ok(())
+    }
+}

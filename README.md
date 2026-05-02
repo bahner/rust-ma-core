@@ -84,11 +84,56 @@ IPNS publish/resolve, key management, pinning.
 
 ## Feature flags
 
-| Feature | Default | Description |
-|---------|---------|-------------|
-| `kubo`  | no      | Kubo RPC client for IPFS publishing |
-| `iroh`  | yes     | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
-| `gossip`| yes     | Iroh gossip helpers (`join_gossip_topic`, `gossip_send`, broadcast helpers) |
+| Feature  | Default | Description |
+|----------|---------|-------------|
+| `kubo`   | no      | Kubo RPC client for IPFS publishing |
+| `iroh`   | yes     | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
+| `gossip` | yes     | Iroh gossip helpers (`join_gossip_topic`, `gossip_send`, broadcast helpers) |
+| `config` | no      | Daemon config: YAML, encrypted secret bundle, CLI args, logging init (native only) |
+
+### `config` feature
+
+The `config` feature is not available on `wasm32` targets.
+
+It provides:
+
+- **`Config`** — runtime configuration struct built from CLI args, environment
+  variables (`MA_<SLUG>_*` then `MA_*`), a YAML file, and built-in defaults.
+- **`MaArgs`** — a `#[derive(Args)]` struct you flatten into your own `Parser`.
+- **`SecretBundle`** — four standard 32-byte keys (`iroh`, `ipns`,
+  `did_signing`, `did_encryption`) plus any number of named extra keys,
+  encrypted with Argon2id + ChaCha20-Poly1305 and stored on disk.
+- **`Config::init_logging()`** — sets up `tracing-subscriber` with separate
+  log levels for file and stdout.
+
+Minimal usage:
+
+```rust,ignore
+use clap::Parser;
+use ma_core::config::{Config, MaArgs};
+
+const MA_DEFAULT_SLUG: &str = "myd";
+
+#[derive(Parser)]
+struct Cli {
+    #[command(flatten)]
+    ma: MaArgs,
+}
+
+fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
+    let config = Config::from_args(&cli.ma, MA_DEFAULT_SLUG)?;
+    config.init_logging()?;
+    Ok(())
+}
+```
+
+Config file (`$XDG_CONFIG_HOME/ma/<slug>.yaml`) example:
+
+```yaml
+log_level: debug
+kubo_rpc_url: http://127.0.0.1:5001
+```
 
 ## Platform support
 

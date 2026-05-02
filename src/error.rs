@@ -48,6 +48,16 @@ pub enum Error {
     #[error("endpoint ID derivation failed: {0}")]
     EndpointId(String),
 
+    // ─── Config ─────────────────────────────────────────────────────────
+    #[cfg(feature = "config")]
+    #[error("config error: {0}")]
+    Config(String),
+
+    // ─── Secrets bundle ──────────────────────────────────────────────────
+    #[cfg(feature = "config")]
+    #[error("secrets error: {0}")]
+    Secrets(String),
+
     // ─── Service registration ───────────────────────────────────────────
     #[error("duplicate service ALPN: {0}")]
     DuplicateService(String),
