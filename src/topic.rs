@@ -26,6 +26,7 @@ pub type TopicId = [u8; 32];
 /// let id = topic_id("/ma/broadcast/0.0.1");
 /// assert_eq!(id, *blake3::hash(b"/ma/broadcast/0.0.1").as_bytes());
 /// ```
+#[must_use]
 pub fn topic_id(name: &str) -> TopicId {
     *blake3::hash(name.as_bytes()).as_bytes()
 }
@@ -71,21 +72,25 @@ impl Topic {
     /// Create a topic for the well-known broadcast channel.
     ///
     /// Equivalent to `Topic::new("/ma/broadcast/0.0.1")`.
+    #[must_use]
     pub fn broadcast() -> Self {
         Self::new(BROADCAST_TOPIC)
     }
 
     /// The human-readable topic name.
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
     /// The BLAKE3-derived topic identifier.
+    #[must_use]
     pub fn id(&self) -> &TopicId {
         &self.id
     }
 
     /// Whether this topic is currently subscribed (has an inbox).
+    #[must_use]
     pub fn is_subscribed(&self) -> bool {
         self.inbox.is_some()
     }
@@ -130,11 +135,13 @@ impl Topic {
         let expires_at = if message.ttl == 0 {
             0
         } else {
-            message.created_at.saturating_add(message.ttl)
+            message_created_at_secs(message.created_at).saturating_add(message.ttl)
         };
 
-        // Safety: we checked inbox.is_some() above.
-        self.inbox.as_mut().unwrap().push(now, expires_at, message);
+        let Some(inbox) = self.inbox.as_mut() else {
+            return false;
+        };
+        inbox.push(now, expires_at, message);
         true
     }
 
@@ -162,6 +169,7 @@ impl Topic {
     }
 
     /// Whether a sender DID is blocked.
+    #[must_use]
     pub fn is_blocked(&self, sender_did: &str) -> bool {
         self.blocked.contains(sender_did)
     }
@@ -196,13 +204,29 @@ impl Topic {
 
         // §1.4 rule 4: TTL check.
         if message.ttl > 0 {
-            let expires_at = message.created_at.saturating_add(message.ttl);
+            let expires_at =
+                message_created_at_secs(message.created_at).saturating_add(message.ttl);
             if expires_at <= now_secs() {
                 return false;
             }
         }
 
         true
+    }
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn message_created_at_secs(created_at: f64) -> u64 {
+    if !created_at.is_finite() || created_at <= 0.0 {
+        0
+    } else if created_at >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        created_at.floor() as u64
     }
 }
 

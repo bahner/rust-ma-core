@@ -46,7 +46,7 @@ impl<T> Inbox<T> {
     pub fn push(&self, now: u64, expires_at: u64, item: T) {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .push(now, expires_at, item);
     }
 
@@ -54,7 +54,7 @@ impl<T> Inbox<T> {
     pub fn pop(&self, now: u64) -> Option<T> {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop(now)
     }
 
@@ -65,7 +65,7 @@ impl<T> Inbox<T> {
     {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .peek(now)
             .cloned()
     }
@@ -74,7 +74,7 @@ impl<T> Inbox<T> {
     pub fn drain(&self, now: u64) -> Vec<T> {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .drain(now)
     }
 
@@ -82,7 +82,7 @@ impl<T> Inbox<T> {
     pub fn len(&self) -> usize {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len()
     }
 
@@ -90,7 +90,7 @@ impl<T> Inbox<T> {
     pub fn is_empty(&self) -> bool {
         self.queue
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .is_empty()
     }
 }

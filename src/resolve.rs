@@ -29,12 +29,14 @@ impl GatewayResolver {
         if !url.ends_with('/') {
             url.push('/');
         }
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(15))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             gateway_url: url,
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(15))
-                .build()
-                .expect("failed to build HTTP client"),
+            client,
         }
     }
 }

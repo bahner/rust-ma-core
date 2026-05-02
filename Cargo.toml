@@ -16,6 +16,7 @@ default = ["iroh", "gossip"]
 kubo = []
 iroh = ["dep:iroh"]
 gossip = ["iroh", "dep:iroh-gossip"]
+acl = ["dep:cid", "dep:serde_yaml"]
 config = [
     "dep:argon2",
     "dep:chacha20poly1305",
@@ -33,12 +34,13 @@ async-trait = "0.1"
 base64 = "0.22"
 blake3 = "1"
 bytes = "1.11.1"
+cid = { version = "0.11.3", features = ["serde"], optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 clap = { version = "4", features = ["derive", "env"], optional = true }
-did-ma = { package = "ma-did", version = "0.4" }
+did-ma = { package = "ma-did", version = "^0.5" }
 directories = { version = "5", optional = true }
-iroh = { version = "0.97.0", default-features = false, optional = true }
-iroh-gossip = { version = "0.97.0", default-features = false, features = ["net"], optional = true }
+iroh = { version = "^0.98", default-features = false, features = ["tls-ring"], optional = true }
+iroh-gossip = { version = "^0.98", default-features = false, features = ["net"], optional = true }
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -49,6 +51,7 @@ tokio = { version = "1.52", features = ["io-util"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
 zeroize = { version = "1", features = ["derive"], optional = true }
+iroh-base = "^0.98"
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt"] }

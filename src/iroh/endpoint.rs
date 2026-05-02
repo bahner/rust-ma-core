@@ -41,7 +41,7 @@ impl IrohEndpoint {
             .bind()
             .await
             .map_err(|e| Error::Transport(format!("endpoint bind failed: {e}")))?;
-        let _ = endpoint.online().await;
+        endpoint.online().await;
 
         debug!(
             endpoint_id = %endpoint.id(),
@@ -81,7 +81,7 @@ impl IrohEndpoint {
             .endpoint
             .addr()
             .relay_urls()
-            .map(|url| url.to_string())
+            .map(std::string::ToString::to_string)
             .min()
             .ok_or_else(|| {
                 Error::Transport("iroh endpoint has no relay URL available".to_string())
@@ -95,6 +95,9 @@ impl IrohEndpoint {
     }
 
     /// Open a persistent write-only [`Channel`] to a remote endpoint.
+    ///
+    /// # Errors
+    /// Returns an error if target parsing, connection, or stream opening fails.
     pub async fn open(&self, target: &str, protocol: &str) -> Result<Channel> {
         let addr = self.resolve_addr(target)?;
         self.open_addr(addr, protocol).await
@@ -133,6 +136,10 @@ impl IrohEndpoint {
     ///
     /// Resolves the DID document, finds a matching service for the
     /// requested protocol, and opens a persistent channel.
+    ///
+    /// # Errors
+    /// Returns an error if DID resolution fails, no matching service exists,
+    /// route parsing fails, or connection setup cannot complete.
     pub async fn outbox(
         &self,
         resolver: &dyn DidResolver,
@@ -148,7 +155,7 @@ impl IrohEndpoint {
             .and_then(|services| serde_json::to_value(services).ok());
         let endpoint_id =
             resolve_endpoint_for_protocol(services.as_ref(), protocol).ok_or_else(|| {
-                Error::NoInboxTransport(format!("{} has no service for {}", did, protocol,))
+                Error::NoInboxTransport(format!("{did} has no service for {protocol}"))
             })?;
 
         let route = extract_ma_iroh_route(doc.ma.as_ref());
@@ -413,7 +420,7 @@ impl ProtocolHandler for InboxProtocolHandler {
             let expires_at = if message.ttl == 0 {
                 0
             } else {
-                message.created_at.saturating_add(message.ttl)
+                message_created_at_secs(message.created_at).saturating_add(message.ttl)
             };
 
             self.inbox.push(now_secs(), expires_at, message);
@@ -437,6 +444,21 @@ fn now_secs() -> u64 {
         .duration_since(UNIX_EPOCH)
         .expect("system clock before UNIX epoch")
         .as_secs()
+}
+
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+fn message_created_at_secs(created_at: f64) -> u64 {
+    if !created_at.is_finite() || created_at <= 0.0 {
+        0
+    } else if created_at >= u64::MAX as f64 {
+        u64::MAX
+    } else {
+        created_at.floor() as u64
+    }
 }
 
 #[cfg(test)]
@@ -573,7 +595,7 @@ mod tests {
 
     // Requires network (iroh endpoint bind); run with `cargo test -- --ignored`.
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires iroh network runtime"]
     async fn service_returns_shared_inbox() {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
@@ -590,7 +612,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires iroh network runtime"]
     async fn service_auto_starts_router() {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
@@ -609,7 +631,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires iroh network runtime"]
     async fn remove_service_updates_protocol_list() {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
@@ -638,7 +660,7 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
+    #[ignore = "requires iroh network runtime"]
     async fn service_after_start_router_triggers_reload() {
         use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;

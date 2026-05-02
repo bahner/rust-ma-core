@@ -1,6 +1,6 @@
 //! # ma-core
 //!
-//! A lean DIDComm service library for the ma ecosystem.
+//! A lean `DIDComm` service library for the ma ecosystem.
 //!
 //! `ma-core` provides the building blocks for ma-capable endpoints:
 //!
@@ -40,7 +40,20 @@
 //! publishing via Kubo requires a native target.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::if_not_else,
+    clippy::items_after_statements,
+    clippy::manual_let_else,
+    clippy::map_unwrap_or,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    clippy::uninlined_format_args
+)]
 
+#[cfg(feature = "acl")]
+pub mod acl;
 #[cfg(all(feature = "config", not(target_arch = "wasm32")))]
 pub mod config;
 pub mod endpoint;
@@ -76,6 +89,9 @@ pub use did_ma::{
 // ─── Re-export core error type ──────────────────────────────────────────────
 
 pub use error::{Error, Result};
+
+#[cfg(feature = "acl")]
+pub use acl::Acl;
 
 // ─── Re-export service constants ────────────────────────────────────────────
 

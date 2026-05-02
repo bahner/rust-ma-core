@@ -47,6 +47,9 @@ impl Outbox {
     /// Send a ma message to the remote service.
     ///
     /// Validates the message headers, serializes to CBOR, and transmits.
+    ///
+    /// # Errors
+    /// Returns an error if validation, serialization, or transport send fails.
     pub async fn send(&mut self, message: &Message) -> Result<()> {
         message.headers().validate()?;
         let cbor = message.to_cbor()?;
@@ -56,11 +59,13 @@ impl Outbox {
     }
 
     /// The DID this outbox delivers to.
+    #[must_use]
     pub fn did(&self) -> &str {
         &self.did
     }
 
     /// The protocol this outbox is connected to.
+    #[must_use]
     pub fn protocol(&self) -> &str {
         &self.protocol
     }

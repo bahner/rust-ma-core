@@ -58,6 +58,11 @@ pub enum Error {
     #[error("secrets error: {0}")]
     Secrets(String),
 
+    // ─── ACL ─────────────────────────────────────────────────────────────
+    #[cfg(feature = "acl")]
+    #[error("acl error: {0}")]
+    Acl(String),
+
     // ─── Service registration ───────────────────────────────────────────
     #[error("duplicate service ALPN: {0}")]
     DuplicateService(String),

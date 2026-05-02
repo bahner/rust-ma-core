@@ -234,19 +234,19 @@ pub async fn publish_did_document_to_kubo(
         }
     }
 
-    let document_cid = dag_put(kubo_url, &document).await?;
+    let published_cid = dag_put(kubo_url, &document).await?;
     let ipns_options = IpnsPublishOptions::default();
     name_publish_with_retry(
         kubo_url,
         &key_name,
-        &document_cid,
+        &published_cid,
         &ipns_options,
         3,
-        Duration::from_millis(1_000),
+        Duration::from_secs(1),
     )
     .await?;
 
-    Ok(Some(document_cid))
+    Ok(Some(published_cid))
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]

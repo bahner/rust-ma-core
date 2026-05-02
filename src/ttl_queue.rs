@@ -1,7 +1,7 @@
 //! A bounded FIFO queue with per-item TTL and lazy eviction.
 //!
 //! Designed for service mailboxes: incoming messages sit in a queue until
-//! consumed or expired. Wasm-compatible (no std::time — caller supplies
+//! consumed or expired. Wasm-compatible (no `std::time` — caller supplies
 //! `now` as a Unix-epoch seconds value).
 
 use std::collections::VecDeque;

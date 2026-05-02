@@ -14,6 +14,7 @@
 /// Accepts formats:
 /// - `/iroh/<endpoint-id>/<protocol>`
 /// - bare 64-char hex endpoint ID
+#[must_use]
 pub fn endpoint_id_from_transport(input: &str) -> Option<String> {
     let value = input.trim();
     if value.is_empty() {
@@ -34,6 +35,7 @@ pub fn endpoint_id_from_transport(input: &str) -> Option<String> {
 /// Parse a transport string and extract the protocol (service identifier).
 ///
 /// For `/iroh/<endpoint-id>/ma/inbox/0.0.1` returns `Some("/ma/inbox/0.0.1")`.
+#[must_use]
 pub fn protocol_from_transport(input: &str) -> Option<String> {
     let value = input.trim();
     if let Some(rest) = value.strip_prefix("/iroh/") {
@@ -49,6 +51,7 @@ pub fn protocol_from_transport(input: &str) -> Option<String> {
 }
 
 /// Extract endpoint ID from a transport JSON value (string or object).
+#[must_use]
 pub fn endpoint_id_from_transport_value(value: &serde_json::Value) -> Option<String> {
     match value {
         serde_json::Value::String(s) => endpoint_id_from_transport(s),
@@ -69,6 +72,7 @@ pub fn endpoint_id_from_transport_value(value: &serde_json::Value) -> Option<Str
 /// Resolve the inbox endpoint ID from a DID document's `ma` section.
 ///
 /// Iterates `services` array entries looking for a parseable endpoint ID.
+#[must_use]
 pub fn resolve_inbox_endpoint_id(services: Option<&serde_json::Value>) -> Option<String> {
     let value = services?;
     if let Some(items) = value.as_array() {
@@ -84,6 +88,7 @@ pub fn resolve_inbox_endpoint_id(services: Option<&serde_json::Value>) -> Option
 }
 
 /// Find the first transport entry matching a given protocol and return its endpoint ID.
+#[must_use]
 pub fn resolve_endpoint_for_protocol(
     services: Option<&serde_json::Value>,
     target_protocol: &str,
@@ -145,6 +150,7 @@ fn normalize_protocol(input: &str) -> String {
 }
 
 /// Normalize an endpoint ID string: strip `/iroh/` prefix, validate hex format.
+#[must_use]
 pub fn normalize_endpoint_id(address: &str) -> Option<String> {
     let value = address.trim();
     let endpoint = value.strip_prefix("/iroh/").unwrap_or(value);
@@ -157,6 +163,7 @@ pub fn normalize_endpoint_id(address: &str) -> Option<String> {
 /// Build a transport string from an endpoint ID and protocol.
 ///
 /// Returns `/iroh/<endpoint-id><protocol>` where protocol starts with `/`.
+#[must_use]
 pub fn transport_string(endpoint_id: &str, protocol: &str) -> String {
     format!("/iroh/{}{}", endpoint_id, normalize_protocol(protocol))
 }

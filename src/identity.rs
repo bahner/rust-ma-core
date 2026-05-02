@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn multiaddr_ipv4() {
-        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 4433);
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 4433);
         assert_eq!(
             socket_addr_to_multiaddr(&addr),
             "/ip4/127.0.0.1/udp/4433/quic-v1"
