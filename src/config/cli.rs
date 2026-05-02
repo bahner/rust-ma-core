@@ -33,7 +33,7 @@ use clap::Args;
 ///
 /// `MA_CONFIG` and `MA_SLUG` are the only statically-named environment
 /// variables; all other fields are resolved dynamically in
-/// [`Config::from_args`] using the binary's compile-time `MA_DEFAULT_SLUG`
+/// [`super::Config::from_args`] using the binary's compile-time `MA_DEFAULT_SLUG`
 /// constant as a prefix (e.g. `MA_PANTEIA_LOG_LEVEL`), with a plain
 /// `MA_LOG_LEVEL`-style fallback.
 #[derive(Args, Debug, Clone, Default)]

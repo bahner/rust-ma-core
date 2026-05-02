@@ -1,4 +1,4 @@
-.PHONY: build check test doc lint fmt clean distclean
+.PHONY: build check test doc lint fmt fmt-check clean distclean
 
 build:
 	cargo build --all-features
@@ -8,8 +8,10 @@ check:
 	cargo check --no-default-features
 	cargo check
 
-test:
+test: fmt-check
+	cargo clippy --all-targets --all-features -- -W clippy::pedantic -D warnings
 	cargo test --all-features
+	RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 
 doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
@@ -20,6 +22,10 @@ lint:
 
 fmt:
 	cargo fmt
+
+fmt-check:
+	cargo fmt --all --check
+
 
 clean:
 	cargo clean
