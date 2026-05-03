@@ -56,6 +56,8 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_LOG_LEVEL_STDOUT: &str = "warn";
+const DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS: u64 = 60;
+const DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS: u64 = 10;
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_KUBO_RPC_URL: &str = "http://127.0.0.1:5001";
 
@@ -76,6 +78,14 @@ pub struct Config {
 
     /// Log level written to stdout.
     pub log_level_stdout: String,
+
+    /// Cache TTL (seconds) for successful DID document resolutions.
+    /// Set to `0` to disable positive cache entries.
+    pub did_resolver_positive_ttl_secs: u64,
+
+    /// Cache TTL (seconds) for failed DID document resolutions.
+    /// Set to `0` to disable negative cache entries.
+    pub did_resolver_negative_ttl_secs: u64,
 
     /// Path to the log file. `None` → resolved to `XDG_DATA_HOME/ma/<slug>.log`
     /// on first use.
@@ -274,6 +284,16 @@ fn yaml_path(m: &serde_yaml::Mapping, key: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn yaml_u64(m: &serde_yaml::Mapping, key: &str) -> Option<u64> {
+    m.get(serde_yaml::Value::String(key.to_string()))
+        .and_then(|v| match v {
+            serde_yaml::Value::Number(n) => n.as_u64(),
+            serde_yaml::Value::String(s) => s.parse::<u64>().ok(),
+            _ => None,
+        })
+}
+
 // ─── Config impl ─────────────────────────────────────────────────────────────
 
 impl Config {
@@ -286,6 +306,8 @@ impl Config {
             slug: slug.clone(),
             log_level: DEFAULT_LOG_LEVEL.to_string(),
             log_level_stdout: DEFAULT_LOG_LEVEL_STDOUT.to_string(),
+            did_resolver_positive_ttl_secs: DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS,
+            did_resolver_negative_ttl_secs: DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS,
             log_file: None,
             #[cfg(not(target_arch = "wasm32"))]
             kubo_rpc_url: DEFAULT_KUBO_RPC_URL.to_string(),
@@ -321,11 +343,26 @@ impl Config {
                 .and_then(|v| v.as_str().map(PathBuf::from))
         };
 
+        let take_u64 = |map: &mut serde_yaml::Mapping, key: &str| {
+            map.remove(serde_yaml::Value::String(key.to_string()))
+                .and_then(|v| match v {
+                    serde_yaml::Value::Number(n) => n.as_u64(),
+                    serde_yaml::Value::String(s) => s.parse::<u64>().ok(),
+                    _ => None,
+                })
+        };
+
         let slug = take_str(&mut m, "slug").unwrap_or_else(|| "ma".to_string());
         let log_level =
             take_str(&mut m, "log_level").unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string());
         let log_level_stdout = take_str(&mut m, "log_level_stdout")
             .unwrap_or_else(|| DEFAULT_LOG_LEVEL_STDOUT.to_string());
+        let did_resolver_positive_ttl_secs = take_u64(&mut m, "did_resolver_positive_ttl_secs")
+            .unwrap_or(DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS);
+        let did_resolver_negative_ttl_secs = take_u64(&mut m, "did_resolver_negative_ttl_secs")
+            .unwrap_or(DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS);
+        // `config_path` is runtime state and should never be restored from YAML.
+        let _ignored_config_path = take_path(&mut m, "config_path");
         #[cfg(not(target_arch = "wasm32"))]
         let kubo_rpc_url =
             take_str(&mut m, "kubo_rpc_url").unwrap_or_else(|| DEFAULT_KUBO_RPC_URL.to_string());
@@ -336,6 +373,8 @@ impl Config {
             slug,
             log_level,
             log_level_stdout,
+            did_resolver_positive_ttl_secs,
+            did_resolver_negative_ttl_secs,
             log_file: take_path(&mut m, "log_file"),
             #[cfg(not(target_arch = "wasm32"))]
             kubo_rpc_url,
@@ -343,7 +382,7 @@ impl Config {
             kubo_key_alias,
             secret_bundle: take_path(&mut m, "secret_bundle"),
             secret_bundle_passphrase: take_str(&mut m, "secret_bundle_passphrase"),
-            config_path: take_path(&mut m, "config_path"),
+            config_path: None,
             extra: m,
         })
     }
@@ -365,6 +404,18 @@ impl Config {
             "log_level_stdout",
             serde_yaml::Value::String(self.log_level_stdout.clone()),
         );
+        set(
+            "did_resolver_positive_ttl_secs",
+            serde_yaml::Value::Number(serde_yaml::Number::from(
+                self.did_resolver_positive_ttl_secs,
+            )),
+        );
+        set(
+            "did_resolver_negative_ttl_secs",
+            serde_yaml::Value::Number(serde_yaml::Number::from(
+                self.did_resolver_negative_ttl_secs,
+            )),
+        );
         #[cfg(not(target_arch = "wasm32"))]
         set(
             "kubo_rpc_url",
@@ -385,12 +436,6 @@ impl Config {
         if let Some(ref p) = self.secret_bundle {
             set(
                 "secret_bundle",
-                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
-            );
-        }
-        if let Some(ref p) = self.config_path {
-            set(
-                "config_path",
                 serde_yaml::Value::String(p.to_string_lossy().into_owned()),
             );
         }
@@ -445,6 +490,7 @@ impl Config {
     /// 3. `MA_FIELD` environment variable (static fallback)
     /// 4. Value from the YAML config file
     /// 5. Built-in default
+    #[allow(clippy::too_many_lines)]
     pub fn from_args(args: &MaArgs, default_slug: &'static str) -> Result<Self> {
         // The env-var prefix is determined by the compile-time constant.
         // e.g. default_slug = "panteia"  →  prefix = "PANTEIA"
@@ -510,6 +556,24 @@ impl Config {
             })
         };
 
+        let resolve_u64 = |cli: Option<u64>, env_key: &str, default: u64| -> u64 {
+            cli.or_else(|| {
+                std::env::var(format!("MA_{prefix}_{env_key}"))
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+            })
+            .or_else(|| {
+                std::env::var(format!("MA_{env_key}"))
+                    .ok()
+                    .and_then(|v| v.parse::<u64>().ok())
+            })
+            .or_else(|| {
+                yaml.as_ref()
+                    .and_then(|m| yaml_u64(m, &env_key.to_lowercase()))
+            })
+            .unwrap_or(default)
+        };
+
         let log_level = resolve_str(args.log_level.clone(), "LOG_LEVEL", DEFAULT_LOG_LEVEL);
         let log_level_stdout = resolve_str(
             args.log_level_stdout.clone(),
@@ -517,6 +581,16 @@ impl Config {
             DEFAULT_LOG_LEVEL_STDOUT,
         );
         let log_file = resolve_opt_path(args.log_file.clone(), "LOG_FILE");
+        let did_resolver_positive_ttl_secs = resolve_u64(
+            args.did_resolver_positive_ttl_secs,
+            "DID_RESOLVER_POSITIVE_TTL_SECS",
+            DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS,
+        );
+        let did_resolver_negative_ttl_secs = resolve_u64(
+            args.did_resolver_negative_ttl_secs,
+            "DID_RESOLVER_NEGATIVE_TTL_SECS",
+            DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS,
+        );
         let kubo_rpc_url = resolve_str(
             args.kubo_rpc_url.clone(),
             "KUBO_RPC_URL",
@@ -536,10 +610,14 @@ impl Config {
             "log_level",
             "log_level_stdout",
             "log_file",
+            "did_resolver_positive_ttl_secs",
+            "did_resolver_negative_ttl_secs",
             "kubo_rpc_url",
             "kubo_key_alias",
             "secret_bundle",
             "secret_bundle_passphrase",
+            // Legacy key; ignored and never persisted.
+            "config_path",
         ];
         let extra = yaml
             .map(|mut m| {
@@ -554,6 +632,8 @@ impl Config {
             slug,
             log_level,
             log_level_stdout,
+            did_resolver_positive_ttl_secs,
+            did_resolver_negative_ttl_secs,
             log_file,
             #[cfg(not(target_arch = "wasm32"))]
             kubo_rpc_url,
@@ -586,6 +666,16 @@ impl Config {
         } else {
             default_secret_bundle_path(&self.slug)
         }
+    }
+
+    /// Build a gateway-backed DID resolver using config TTL settings.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[must_use]
+    pub fn gateway_resolver(&self) -> crate::resolve::GatewayResolver {
+        crate::resolve::GatewayResolver::new(self.kubo_rpc_url.clone()).with_cache_ttls(
+            std::time::Duration::from_secs(self.did_resolver_positive_ttl_secs),
+            std::time::Duration::from_secs(self.did_resolver_negative_ttl_secs),
+        )
     }
 
     /// Save this config to [`Self::config_path`] as YAML with 0600
@@ -668,6 +758,8 @@ impl Config {
             slug: slug.clone(),
             log_level: DEFAULT_LOG_LEVEL.to_string(),
             log_level_stdout: DEFAULT_LOG_LEVEL_STDOUT.to_string(),
+            did_resolver_positive_ttl_secs: DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS,
+            did_resolver_negative_ttl_secs: DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS,
             log_file: None,
             #[cfg(not(target_arch = "wasm32"))]
             kubo_rpc_url: DEFAULT_KUBO_RPC_URL.to_string(),

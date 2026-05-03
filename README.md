@@ -136,6 +136,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = Config::from_args(&cli.ma, MA_DEFAULT_SLUG)?;
     config.init_logging()?;
+  let _resolver = config.gateway_resolver();
     Ok(())
 }
 ```
@@ -145,6 +146,8 @@ Config file (`$XDG_CONFIG_HOME/ma/<slug>.yaml`) example:
 ```yaml
 log_level: debug
 kubo_rpc_url: http://127.0.0.1:5001
+did_resolver_positive_ttl_secs: 60
+did_resolver_negative_ttl_secs: 10
 ```
 
 ## Platform support

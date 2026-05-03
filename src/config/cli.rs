@@ -76,6 +76,22 @@ pub struct MaArgs {
     #[arg(long)]
     pub log_level_stdout: Option<String>,
 
+    /// Positive DID cache TTL in seconds.
+    ///
+    /// Set to `0` to disable caching successful DID resolutions.
+    /// Resolved via `MA_<MA_DEFAULT_SLUG>_DID_RESOLVER_POSITIVE_TTL_SECS` →
+    /// `MA_DID_RESOLVER_POSITIVE_TTL_SECS` → YAML → default `60`.
+    #[arg(long)]
+    pub did_resolver_positive_ttl_secs: Option<u64>,
+
+    /// Negative DID cache TTL in seconds.
+    ///
+    /// Set to `0` to disable caching failed DID resolutions.
+    /// Resolved via `MA_<MA_DEFAULT_SLUG>_DID_RESOLVER_NEGATIVE_TTL_SECS` →
+    /// `MA_DID_RESOLVER_NEGATIVE_TTL_SECS` → YAML → default `10`.
+    #[arg(long)]
+    pub did_resolver_negative_ttl_secs: Option<u64>,
+
     /// Path to the encrypted secret bundle file.
     /// Defaults to `XDG_CONFIG_HOME/ma/<slug>.bin`.
     ///
