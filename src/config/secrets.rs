@@ -40,6 +40,10 @@
 //!
 //! Key derivation uses Argon2id with default OWASP-minimum parameters
 //! (m=19456, t=2, p=1), producing a 32-byte ChaCha20-Poly1305 encryption key.
+//!
+//! On `wasm32`, use [`SecretBundle::encrypt`] / [`SecretBundle::decrypt`] with
+//! application-managed storage (e.g. IndexedDB/localStorage). File-based
+//! [`SecretBundle::load`] / [`SecretBundle::save`] are native-only.
 
 use std::collections::HashMap;
 
@@ -312,6 +316,7 @@ impl SecretBundle {
     }
 
     /// Load and decrypt a bundle from a file.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn load(path: &std::path::Path, passphrase: &str) -> Result<Self> {
         let data = std::fs::read(path)
             .map_err(|e| Error::Secrets(format!("failed to read {}: {e}", path.display())))?;
@@ -319,6 +324,7 @@ impl SecretBundle {
     }
 
     /// Encrypt this bundle and write it to `path` with 0600 permissions.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&self, path: &std::path::Path, passphrase: &str) -> Result<()> {
         let encrypted = self.encrypt(passphrase)?;
         super::write_secure(path, &encrypted)

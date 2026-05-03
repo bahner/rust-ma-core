@@ -2179,6 +2179,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
+ "web-sys",
  "zeroize",
 ]
 

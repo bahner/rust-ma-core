@@ -5,7 +5,7 @@
 //! `ma-core` provides the building blocks for ma-capable endpoints:
 //!
 //! - **DID documents** — create, validate, resolve, and publish `did:ma:` documents
-//!   to IPFS/IPNS (via Kubo or custom backends).
+//!   to IPFS/IPNS (via Kubo on native targets).
 //! - **Service inboxes** — bounded, TTL-aware FIFO queues ([`Inbox`])
 //!   for receiving validated messages on named protocol services.
 //! - **Outbox sending** — fire-and-forget delivery of validated [`Message`] objects
@@ -24,20 +24,29 @@
 //!
 //! ## Feature flags
 //!
-//! - **`kubo`** (default) — enables Kubo RPC client for IPFS publishing.
+//! - **`kubo`** — enables Kubo RPC client for IPFS publishing (native only).
 //! - **`iroh`** — enables the iroh QUIC transport backend ([`IrohEndpoint`],
 //!   [`Channel`], [`Outbox`]).
 //! - **`gossip`** — enables iroh-gossip broadcast helpers.
 //! - **`config`** — enables [`Config`], [`SecretBundle`], and [`MaArgs`] for
 //!   YAML-based daemon configuration, encrypted secret bundles, and CLI
-//!   argument parsing. Not supported on `wasm32` — a compile error is emitted
-//!   if the feature is enabled on that target.
+//!   argument parsing.
 //!
 //! ## Platform support
 //!
 //! Core types (`Inbox`, `Service`, transport parsing, validation)
-//! compile on all targets including `wasm32-unknown-unknown`. Kubo, DID
-//! publishing via Kubo requires a native target.
+//! compile on all targets including `wasm32-unknown-unknown`. Kubo/IPFS
+//! traffic requires a native target.
+//!
+//! ### wasm vs native
+//!
+//! - `ma-core` supports both wasm and native targets.
+//! - All IPFS-related APIs are native-only (`not(wasm32)` + `kubo` feature).
+//! - wasm builds do not expose the `ipfs` module or Kubo/IPFS helpers.
+//! - `config` serialization and `SecretBundle` crypto work on wasm.
+//! - `config` filesystem paths, CLI/env merging, and file I/O are native-only.
+//! - If your wasm application needs IPFS access, use a wasm-capable IPFS
+//!   client in the application layer.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -54,16 +63,15 @@
 
 #[cfg(feature = "acl")]
 pub mod acl;
-#[cfg(all(feature = "config", not(target_arch = "wasm32")))]
+#[cfg(feature = "config")]
 pub mod config;
 pub mod endpoint;
 pub mod error;
-#[cfg(feature = "gossip")]
-pub mod gossip;
 pub mod identity;
 pub mod inbox;
 pub mod interfaces;
-pub mod ipfs_publish;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+pub mod ipfs;
 #[cfg(feature = "iroh")]
 pub mod iroh;
 #[cfg(feature = "iroh")]
@@ -73,10 +81,6 @@ pub mod service;
 pub mod topic;
 pub mod transport;
 pub(crate) mod ttl_queue;
-
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub mod kubo;
-pub mod pinning;
 
 // ─── Re-export did-ma types so users don't need a separate dependency ───────
 
@@ -131,7 +135,7 @@ pub use ::iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
 // ─── Re-export gossip helpers ────────────────────────────────────────────────
 
 #[cfg(feature = "gossip")]
-pub use gossip::{
+pub use iroh::gossip::{
     broadcast_topic_id, gossip_send, gossip_send_text, join_broadcast_channel, join_gossip_topic,
     topic_id_for,
 };
@@ -151,7 +155,9 @@ pub use identity::{generate_secret_key_file, load_secret_key_bytes, socket_addr_
 // ─── Re-export config types ──────────────────────────────────────────────────
 
 #[cfg(all(feature = "config", not(target_arch = "wasm32")))]
-pub use config::{Config, MaArgs, SecretBundle};
+pub use config::MaArgs;
+#[cfg(feature = "config")]
+pub use config::{BrowserIdentityExport, Config, SecretBundle};
 
 // ─── Re-export DID resolution ───────────────────────────────────────────────
 
@@ -163,13 +169,4 @@ pub use resolve::GatewayResolver;
 
 pub use interfaces::{DidPublisher, IpfsPublisher};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use ipfs_publish::KuboDidPublisher;
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use ipfs_publish::{handle_ipfs_publish, publish_did_document_to_kubo};
-pub use ipfs_publish::{
-    validate_ipfs_publish_request, IpfsPublishDidRequest, IpfsPublishDidResponse,
-    ValidatedIpfsPublish,
-};
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use kubo::KuboKey;
-pub use pinning::{pin_update_add_rm, PinUpdateOutcome};
+pub use ipfs::*;

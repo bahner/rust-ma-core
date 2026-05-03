@@ -89,22 +89,34 @@ IPNS publish/resolve, key management, pinning.
 | `kubo`   | no      | Kubo RPC client for IPFS publishing |
 | `iroh`   | yes     | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
 | `gossip` | yes     | Iroh gossip helpers (`join_gossip_topic`, `gossip_send`, broadcast helpers) |
-| `config` | no      | Daemon config: YAML, encrypted secret bundle, CLI args, logging init (native only) |
+| `config` | no      | Config model + YAML serialization + encrypted secret bundles (CLI/fs/logging remain native-only) |
 
 ### `config` feature
 
-The `config` feature is not available on `wasm32` targets.
+The `config` feature supports both native and `wasm32` targets, but with
+different capability levels.
 
-It provides:
+It provides on all targets:
 
-- **`Config`** — runtime configuration struct built from CLI args, environment
-  variables (`MA_<SLUG>_*` then `MA_*`), a YAML file, and built-in defaults.
+- **`Config`** — serializable config model (`from_yaml_str`, `to_yaml_string`).
+- **`SecretBundle`** — generate keys and encrypt/decrypt bundle bytes.
+- **`BrowserIdentityExport`** — JSON payload with inlined encrypted bundle
+  (`encrypted_secret_bundle_base64`) for browser import/export.
+
+Native-only additions:
+
 - **`MaArgs`** — a `#[derive(Args)]` struct you flatten into your own `Parser`.
-- **`SecretBundle`** — four standard 32-byte keys (`iroh`, `ipns`,
-  `did_signing`, `did_encryption`) plus any number of named extra keys,
-  encrypted with Argon2id + ChaCha20-Poly1305 and stored on disk.
+- **`Config::from_args`** — merge CLI/env/YAML/defaults for daemons.
+- **`Config::save` / `Config::gen_headless`** — filesystem persistence helpers.
+- **`SecretBundle::save` / `SecretBundle::load`** — encrypted file I/O.
 - **`Config::init_logging()`** — sets up `tracing-subscriber` with separate
   log levels for file and stdout.
+
+Wasm logging behavior:
+
+- `Config::init_logging()` is also available on wasm and routes logs to browser
+  console.
+- Console output is filtered by `log_level_stdout`.
 
 Minimal usage:
 
@@ -140,10 +152,27 @@ kubo_rpc_url: http://127.0.0.1:5001
 Core types (`Inbox`, `Service`, transport parsing, validation)
 compile on all targets including `wasm32-unknown-unknown`.
 
-- `kubo` APIs are native-only.
+- This library is intended for both wasm and native targets.
+- All IPFS-related functionality is native-only and unavailable on wasm.
+- On wasm builds, the `ipfs` module and Kubo/IPFS helpers are not compiled in.
+- `config` model serialization and `SecretBundle` crypto are available on wasm.
+- `config` filesystem and CLI/env facilities are native-only.
 - `GatewayResolver` is native-only.
 - `iroh` transport compiles on wasm and native.
 - `gossip` is optional and can be enabled when needed.
+
+Important: ma-core does not provide IPFS/Kubo access for wasm. If your wasm
+application needs IPFS operations, use a wasm-capable IPFS client in the app
+layer.
+
+For wasm storage, persist encrypted `SecretBundle` bytes and serialized `Config`
+text in browser storage, and provide the passphrase from user input at runtime
+instead of storing it.
+
+Compile-time split note:
+
+- On wasm, `Config` does not include Kubo-specific fields.
+- On native, `Config` includes daemon/Kubo fields and filesystem helpers.
 
 ## Quick usage
 
@@ -160,7 +189,7 @@ while let Some(msg) = inbox.pop(now) {
 }
 ```
 
-Example: full publish flow against Kubo (non-WASM):
+Example: full publish flow against Kubo (native only):
 
 ```rust
 #[cfg(not(target_arch = "wasm32"))]
@@ -174,7 +203,7 @@ async fn publish(message_cbor: &[u8]) -> anyhow::Result<()> {
 
 ## End-to-end operational flow
 
-This section shows a concrete non-WASM flow for publishing a DID document through Kubo.
+This section shows a concrete native-only flow for publishing a DID document through Kubo.
 
 ### 1. Preconditions
 
@@ -219,7 +248,7 @@ pub async fn verify_publish(
   ipns_id: &str,
   expected_cid: &str,
 ) -> anyhow::Result<()> {
-  let resolved = ma_core::kubo::name_resolve(publisher.kubo_url(), &format!("/ipns/{ipns_id}"), true).await?;
+  let resolved = ma_core::name_resolve(publisher.kubo_url(), &format!("/ipns/{ipns_id}"), true).await?;
   let expected = format!("/ipfs/{expected_cid}");
   anyhow::ensure!(resolved == expected, "resolved target mismatch: {resolved} != {expected}");
   Ok(())

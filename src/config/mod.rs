@@ -1,7 +1,13 @@
 //! Configuration for ma-core-based daemons.
 //!
-//! Provides [`Config`], a runtime configuration struct that is populated from
-//! (in decreasing priority):
+//! Provides [`Config`], a configuration model that supports:
+//!
+//! - native daemon bootstrapping from CLI/env/YAML/defaults via
+//!   [`Config::from_args`]
+//! - storage-agnostic serialization workflows (including wasm) via
+//!   [`Config::from_yaml_str`] and [`Config::to_yaml_string`]
+//!
+//! Native `from_args` resolves fields from (in decreasing priority):
 //!
 //! 1. Explicit CLI arguments (via [`MaArgs`])
 //! 2. `MA_<MA_DEFAULT_SLUG>_*` environment variables (slug-prefixed, set per binary)
@@ -9,9 +15,10 @@
 //! 4. YAML config file (`XDG_CONFIG_HOME/ma/<slug>.yaml`)
 //! 5. Built-in defaults
 //!
-//! # Compile-time constant requirement
+//! # Native compile-time constant requirement
 //!
-//! Every binary using this module **must** declare a compile-time constant:
+//! Binaries using [`Config::from_args`] **must** declare a compile-time
+//! constant:
 //!
 //! ```no_run
 //! const MA_DEFAULT_SLUG: &str = "panteia";
@@ -23,31 +30,41 @@
 //!   This prefix is fixed at compile time and cannot be changed at runtime.
 //!   Only file-naming can be overridden via `--slug`.
 
-#[cfg(target_arch = "wasm32")]
-compile_error!("the `config` feature is not supported on wasm32 targets");
-
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
+#[cfg(not(target_arch = "wasm32"))]
 mod logging;
+#[cfg(target_arch = "wasm32")]
+mod logging_wasm;
 pub mod secrets;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use cli::MaArgs;
 pub use secrets::SecretBundle;
 
+#[cfg(target_arch = "wasm32")]
+use std::path::PathBuf;
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
 use crate::error::{Error, Result};
+use base64::engine::general_purpose::STANDARD as B64;
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
 
 const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_LOG_LEVEL_STDOUT: &str = "warn";
+#[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_KUBO_RPC_URL: &str = "http://127.0.0.1:5001";
 
 // ─── Config struct ───────────────────────────────────────────────────────────
 
 /// Runtime configuration for a ma daemon.
 ///
-/// Build via [`Config::from_args`] after parsing CLI arguments.
+/// Build via [`Config::from_args`] on native targets or via YAML/string
+/// serialization helpers on wasm.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Short printable slug identifying this daemon instance.
@@ -64,9 +81,11 @@ pub struct Config {
     /// on first use.
     pub log_file: Option<PathBuf>,
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Kubo JSON-RPC API URL.
     pub kubo_rpc_url: String,
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// IPNS key alias registered in Kubo for this daemon.
     pub kubo_key_alias: String,
 
@@ -85,24 +104,64 @@ pub struct Config {
     pub extra: serde_yaml::Mapping,
 }
 
+/// Browser-friendly identity export payload.
+///
+/// Contains serialized config text and an encrypted secret bundle encoded as
+/// base64 so it can be stored or copied as plain JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrowserIdentityExport {
+    pub version: u8,
+    pub config_yaml: String,
+    pub encrypted_secret_bundle_base64: String,
+}
+
+impl BrowserIdentityExport {
+    pub fn new(config_yaml: String, encrypted_secret_bundle: &[u8]) -> Self {
+        Self {
+            version: 1,
+            config_yaml,
+            encrypted_secret_bundle_base64: B64.encode(encrypted_secret_bundle),
+        }
+    }
+
+    pub fn encrypted_secret_bundle_bytes(&self) -> Result<Vec<u8>> {
+        B64.decode(self.encrypted_secret_bundle_base64.as_bytes())
+            .map_err(|e| Error::Config(format!("invalid encrypted bundle base64: {e}")))
+    }
+
+    pub fn to_json_string(&self) -> Result<String> {
+        serde_json::to_string(self)
+            .map_err(|e| Error::Config(format!("failed to serialize browser export: {e}")))
+    }
+
+    pub fn from_json_str(json: &str) -> Result<Self> {
+        serde_json::from_str(json)
+            .map_err(|e| Error::Config(format!("failed to parse browser export JSON: {e}")))
+    }
+}
+
 // ─── XDG path helpers ────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn project_dirs() -> Result<directories::ProjectDirs> {
     directories::ProjectDirs::from("", "ma", "ma")
         .ok_or_else(|| Error::Config("cannot determine XDG base directories".to_string()))
 }
 
 /// Default YAML config path: `XDG_CONFIG_HOME/ma/<slug>.yaml`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn default_config_path(slug: &str) -> Result<PathBuf> {
     Ok(project_dirs()?.config_dir().join(format!("{slug}.yaml")))
 }
 
 /// Default secret bundle path: `XDG_CONFIG_HOME/ma/<slug>.bin`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn default_secret_bundle_path(slug: &str) -> Result<PathBuf> {
     Ok(project_dirs()?.config_dir().join(format!("{slug}.bin")))
 }
 
 /// Default log file path: `XDG_DATA_HOME/ma/<slug>.log`.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn default_log_file_path(slug: &str) -> Result<PathBuf> {
     Ok(project_dirs()?.data_dir().join(format!("{slug}.log")))
 }
@@ -113,6 +172,7 @@ pub fn default_log_file_path(slug: &str) -> Result<PathBuf> {
 ///
 /// On Unix the file is created (or truncated) with mode `0600`. On other
 /// platforms the file is written without special permission handling.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn write_secure(path: &Path, data: &[u8]) -> Result<()> {
     use std::io::Write;
 
@@ -163,6 +223,7 @@ pub(crate) fn write_secure(path: &Path, data: &[u8]) -> Result<()> {
 
 /// Check that a file's permissions are not wider than `0600` and log a
 /// warning if they are. Only active on Unix.
+#[cfg(not(target_arch = "wasm32"))]
 fn check_permissions(path: &Path) {
     #[cfg(unix)]
     {
@@ -183,6 +244,7 @@ fn check_permissions(path: &Path) {
 
 // ─── YAML helpers ────────────────────────────────────────────────────────────
 
+#[cfg(not(target_arch = "wasm32"))]
 fn load_yaml_mapping(path: &Path) -> Result<serde_yaml::Mapping> {
     let content = std::fs::read_to_string(path)
         .map_err(|e| Error::Config(format!("failed to read {}: {e}", path.display())))?;
@@ -198,12 +260,14 @@ fn load_yaml_mapping(path: &Path) -> Result<serde_yaml::Mapping> {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn yaml_str(m: &serde_yaml::Mapping, key: &str) -> Option<String> {
     m.get(serde_yaml::Value::String(key.to_string()))
         .and_then(|v| v.as_str())
         .map(String::from)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn yaml_path(m: &serde_yaml::Mapping, key: &str) -> Option<PathBuf> {
     m.get(serde_yaml::Value::String(key.to_string()))
         .and_then(|v| v.as_str())
@@ -213,6 +277,145 @@ fn yaml_path(m: &serde_yaml::Mapping, key: &str) -> Option<PathBuf> {
 // ─── Config impl ─────────────────────────────────────────────────────────────
 
 impl Config {
+    /// Construct a config value suitable for wasm/local storage workflows.
+    ///
+    /// This constructor is storage-agnostic and does not touch the filesystem.
+    pub fn new_for_storage(slug: impl AsRef<str>) -> Self {
+        let slug = slug.as_ref().to_string();
+        Self {
+            slug: slug.clone(),
+            log_level: DEFAULT_LOG_LEVEL.to_string(),
+            log_level_stdout: DEFAULT_LOG_LEVEL_STDOUT.to_string(),
+            log_file: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            kubo_rpc_url: DEFAULT_KUBO_RPC_URL.to_string(),
+            #[cfg(not(target_arch = "wasm32"))]
+            kubo_key_alias: slug,
+            secret_bundle: None,
+            secret_bundle_passphrase: None,
+            config_path: None,
+            extra: serde_yaml::Mapping::new(),
+        }
+    }
+
+    /// Deserialize a config value from YAML text without filesystem I/O.
+    pub fn from_yaml_str(yaml_text: &str) -> Result<Self> {
+        let val: serde_yaml::Value = serde_yaml::from_str(yaml_text)
+            .map_err(|e| Error::Config(format!("failed to parse config YAML: {e}")))?;
+        let mut m = match val {
+            serde_yaml::Value::Mapping(m) => m,
+            _ => {
+                return Err(Error::Config(
+                    "config YAML must be a mapping at the top level".to_string(),
+                ));
+            }
+        };
+
+        let take_str = |map: &mut serde_yaml::Mapping, key: &str| {
+            map.remove(serde_yaml::Value::String(key.to_string()))
+                .and_then(|v| v.as_str().map(ToOwned::to_owned))
+        };
+
+        let take_path = |map: &mut serde_yaml::Mapping, key: &str| {
+            map.remove(serde_yaml::Value::String(key.to_string()))
+                .and_then(|v| v.as_str().map(PathBuf::from))
+        };
+
+        let slug = take_str(&mut m, "slug").unwrap_or_else(|| "ma".to_string());
+        let log_level =
+            take_str(&mut m, "log_level").unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string());
+        let log_level_stdout = take_str(&mut m, "log_level_stdout")
+            .unwrap_or_else(|| DEFAULT_LOG_LEVEL_STDOUT.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        let kubo_rpc_url =
+            take_str(&mut m, "kubo_rpc_url").unwrap_or_else(|| DEFAULT_KUBO_RPC_URL.to_string());
+        #[cfg(not(target_arch = "wasm32"))]
+        let kubo_key_alias = take_str(&mut m, "kubo_key_alias").unwrap_or_else(|| slug.clone());
+
+        Ok(Self {
+            slug,
+            log_level,
+            log_level_stdout,
+            log_file: take_path(&mut m, "log_file"),
+            #[cfg(not(target_arch = "wasm32"))]
+            kubo_rpc_url,
+            #[cfg(not(target_arch = "wasm32"))]
+            kubo_key_alias,
+            secret_bundle: take_path(&mut m, "secret_bundle"),
+            secret_bundle_passphrase: take_str(&mut m, "secret_bundle_passphrase"),
+            config_path: take_path(&mut m, "config_path"),
+            extra: m,
+        })
+    }
+
+    /// Serialize config to YAML text without filesystem I/O.
+    pub fn to_yaml_string(&self) -> Result<String> {
+        let mut m = self.extra.clone();
+
+        let mut set = |k: &str, v: serde_yaml::Value| {
+            m.insert(serde_yaml::Value::String(k.to_string()), v);
+        };
+
+        set("slug", serde_yaml::Value::String(self.slug.clone()));
+        set(
+            "log_level",
+            serde_yaml::Value::String(self.log_level.clone()),
+        );
+        set(
+            "log_level_stdout",
+            serde_yaml::Value::String(self.log_level_stdout.clone()),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        set(
+            "kubo_rpc_url",
+            serde_yaml::Value::String(self.kubo_rpc_url.clone()),
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        set(
+            "kubo_key_alias",
+            serde_yaml::Value::String(self.kubo_key_alias.clone()),
+        );
+
+        if let Some(ref p) = self.log_file {
+            set(
+                "log_file",
+                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
+            );
+        }
+        if let Some(ref p) = self.secret_bundle {
+            set(
+                "secret_bundle",
+                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
+            );
+        }
+        if let Some(ref p) = self.config_path {
+            set(
+                "config_path",
+                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
+            );
+        }
+        if let Some(ref pw) = self.secret_bundle_passphrase {
+            set(
+                "secret_bundle_passphrase",
+                serde_yaml::Value::String(pw.clone()),
+            );
+        }
+
+        serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
+            .map_err(|e| Error::Config(format!("failed to serialize config: {e}")))
+    }
+
+    /// Serialize config to YAML text while excluding secret passphrase fields.
+    ///
+    /// Useful for browser storage where passphrases should be provided by
+    /// runtime user input instead of persisted state.
+    pub fn to_yaml_string_without_passphrase(&self) -> Result<String> {
+        let mut copy = self.clone();
+        copy.secret_bundle_passphrase = None;
+        copy.to_yaml_string()
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     /// Build a `Config` by merging CLI arguments, environment variables, a
     /// YAML config file, and built-in defaults.
     ///
@@ -352,7 +555,9 @@ impl Config {
             log_level,
             log_level_stdout,
             log_file,
+            #[cfg(not(target_arch = "wasm32"))]
             kubo_rpc_url,
+            #[cfg(not(target_arch = "wasm32"))]
             kubo_key_alias,
             secret_bundle,
             secret_bundle_passphrase,
@@ -363,6 +568,7 @@ impl Config {
 
     /// The effective log file path: `self.log_file` if set, otherwise the
     /// XDG default `XDG_DATA_HOME/ma/<slug>.log`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn effective_log_file(&self) -> Result<PathBuf> {
         if let Some(ref p) = self.log_file {
             Ok(p.clone())
@@ -373,6 +579,7 @@ impl Config {
 
     /// The effective secret bundle path: `self.secret_bundle` if set,
     /// otherwise the XDG default `XDG_CONFIG_HOME/ma/<slug>.bin`.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn effective_secret_bundle(&self) -> Result<PathBuf> {
         if let Some(ref p) = self.secret_bundle {
             Ok(p.clone())
@@ -386,57 +593,14 @@ impl Config {
     ///
     /// Known fields are serialized explicitly; extra fields are merged in
     /// afterwards so user-defined keys are preserved.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn save(&self) -> Result<()> {
         let path = self
             .config_path
             .as_ref()
             .ok_or_else(|| Error::Config("cannot save config: no config_path set".to_string()))?;
 
-        let mut m = self.extra.clone();
-
-        let mut set = |k: &str, v: serde_yaml::Value| {
-            m.insert(serde_yaml::Value::String(k.to_string()), v);
-        };
-
-        set("slug", serde_yaml::Value::String(self.slug.clone()));
-        set(
-            "log_level",
-            serde_yaml::Value::String(self.log_level.clone()),
-        );
-        set(
-            "log_level_stdout",
-            serde_yaml::Value::String(self.log_level_stdout.clone()),
-        );
-        set(
-            "kubo_rpc_url",
-            serde_yaml::Value::String(self.kubo_rpc_url.clone()),
-        );
-        set(
-            "kubo_key_alias",
-            serde_yaml::Value::String(self.kubo_key_alias.clone()),
-        );
-
-        if let Some(ref p) = self.log_file {
-            set(
-                "log_file",
-                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
-            );
-        }
-        if let Some(ref p) = self.secret_bundle {
-            set(
-                "secret_bundle",
-                serde_yaml::Value::String(p.to_string_lossy().into_owned()),
-            );
-        }
-        if let Some(ref pw) = self.secret_bundle_passphrase {
-            set(
-                "secret_bundle_passphrase",
-                serde_yaml::Value::String(pw.clone()),
-            );
-        }
-
-        let yaml_text = serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
-            .map_err(|e| Error::Config(format!("failed to serialize config: {e}")))?;
+        let yaml_text = self.to_yaml_string()?;
 
         write_secure(path, yaml_text.as_bytes())
     }
@@ -454,6 +618,7 @@ impl Config {
     /// 5. Print the paths of both files to stdout.
     ///
     /// Returns an error if either file already exists.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn gen_headless(args: &MaArgs, default_slug: &'static str) -> Result<()> {
         use base64::engine::general_purpose::STANDARD;
         use base64::Engine;
@@ -504,7 +669,9 @@ impl Config {
             log_level: DEFAULT_LOG_LEVEL.to_string(),
             log_level_stdout: DEFAULT_LOG_LEVEL_STDOUT.to_string(),
             log_file: None,
+            #[cfg(not(target_arch = "wasm32"))]
             kubo_rpc_url: DEFAULT_KUBO_RPC_URL.to_string(),
+            #[cfg(not(target_arch = "wasm32"))]
             kubo_key_alias: slug.clone(),
             secret_bundle: Some(bundle_path.clone()),
             secret_bundle_passphrase: Some(passphrase),

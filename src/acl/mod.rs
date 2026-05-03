@@ -26,11 +26,21 @@
 //! ```
 
 use std::collections::HashSet;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use std::sync::{Arc, Mutex};
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use std::time::Duration;
 
 use cid::Cid;
 use did_ma::Did;
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use crate::ipfs::{ipfs_add, name_publish_with_retry, IpnsPublishOptions};
 use crate::{Error, Result};
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use tokio::task::JoinHandle;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use tokio::time::sleep;
 
 // ── Internal entry representation ─────────────────────────────────────────────
 
@@ -330,6 +340,122 @@ impl Acl {
     pub fn generation(&self) -> u64 {
         self.generation
     }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+#[derive(Debug)]
+pub struct AclPublishWorker {
+    kubo_url: String,
+    ipns_key_name: String,
+    retry_delay: Duration,
+    publish_task: Option<JoinHandle<()>>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+impl AclPublishWorker {
+    pub fn new(kubo_url: impl AsRef<str>, ipns_key_name: impl AsRef<str>) -> Result<Self> {
+        let kubo_url = kubo_url.as_ref().trim().to_string();
+        let ipns_key_name = ipns_key_name.as_ref().trim().to_string();
+
+        if kubo_url.is_empty() {
+            return Err(Error::Acl("kubo_url must not be empty".to_string()));
+        }
+        if ipns_key_name.is_empty() {
+            return Err(Error::Acl("ipns_key_name must not be empty".to_string()));
+        }
+
+        Ok(Self {
+            kubo_url,
+            ipns_key_name,
+            retry_delay: Duration::from_secs(2),
+            publish_task: None,
+        })
+    }
+
+    #[must_use]
+    pub fn with_retry_delay(mut self, retry_delay: Duration) -> Self {
+        self.retry_delay = retry_delay;
+        self
+    }
+
+    pub fn on_acl_changed(&mut self, acl: Arc<Mutex<Acl>>) {
+        if let Some(task) = self.publish_task.take() {
+            task.abort();
+        }
+
+        let kubo_url = self.kubo_url.clone();
+        let ipns_key_name = self.ipns_key_name.clone();
+        let retry_delay = self.retry_delay;
+
+        self.publish_task = Some(tokio::spawn(async move {
+            loop {
+                let snapshot = {
+                    let guard = match acl.lock() {
+                        Ok(guard) => guard,
+                        Err(_) => return,
+                    };
+
+                    if !guard.dirty {
+                        return;
+                    }
+
+                    let yaml = match guard.to_yaml() {
+                        Ok(yaml) => yaml,
+                        Err(_) => return,
+                    };
+
+                    (guard.generation(), yaml)
+                };
+
+                match publish_acl_once(&kubo_url, &ipns_key_name, &snapshot.1).await {
+                    Ok(cid) => {
+                        let mut guard = match acl.lock() {
+                            Ok(guard) => guard,
+                            Err(_) => return,
+                        };
+                        guard.mark_published(cid, snapshot.0);
+                        if !guard.dirty {
+                            return;
+                        }
+                    }
+                    Err(_) => {
+                        sleep(retry_delay).await;
+                    }
+                }
+            }
+        }));
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+impl Drop for AclPublishWorker {
+    fn drop(&mut self) {
+        if let Some(task) = self.publish_task.take() {
+            task.abort();
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+async fn publish_acl_once(kubo_url: &str, ipns_key_name: &str, yaml: &str) -> Result<Cid> {
+    let cid_str = ipfs_add(kubo_url, yaml.as_bytes().to_vec())
+        .await
+        .map_err(|e| Error::Acl(format!("ACL IPFS add failed: {e}")))?;
+
+    name_publish_with_retry(
+        kubo_url,
+        ipns_key_name,
+        &cid_str,
+        &IpnsPublishOptions::default(),
+        3,
+        Duration::from_secs(1),
+    )
+    .await
+    .map_err(|e| Error::Acl(format!("ACL IPNS publish failed: {e}")))?;
+
+    cid_str
+        .parse::<Cid>()
+        .map_err(|e| Error::Acl(format!("invalid CID from IPFS add: {e}")))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────

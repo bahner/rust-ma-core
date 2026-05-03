@@ -18,7 +18,7 @@ use base64::Engine;
 use std::time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-use crate::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};
+use super::kubo::{dag_put, import_key, list_keys, name_publish_with_retry, IpnsPublishOptions};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
 
@@ -81,7 +81,7 @@ impl KuboDidPublisher {
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
-        crate::kubo::wait_for_api(&self.kubo_url, attempts).await
+        super::kubo::wait_for_api(&self.kubo_url, attempts).await
     }
 }
 
