@@ -5,4 +5,8 @@ mod endpoint;
 #[cfg(feature = "gossip")]
 pub mod gossip;
 
-pub use endpoint::IrohEndpoint;
+use crate::error::Result;
+
+pub(crate) async fn new_endpoint(secret_bytes: [u8; 32]) -> Result<endpoint::IrohEndpoint> {
+    endpoint::IrohEndpoint::new(secret_bytes).await
+}

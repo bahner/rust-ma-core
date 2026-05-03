@@ -1,23 +1,22 @@
-//! DID document resolution traits and implementations.
+//! IPFS gateway DID document resolver traits and implementations.
 
+#[cfg(target_arch = "wasm32")]
+use async_trait::async_trait;
+#[cfg(not(target_arch = "wasm32"))]
 use async_trait::async_trait;
 use did_ma::Document;
-#[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashMap;
-#[cfg(not(target_arch = "wasm32"))]
-use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(not(target_arch = "wasm32"))]
 use std::sync::Mutex;
 use std::time::Duration;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
 /// Trait for resolving a DID to its DID document.
 ///
-/// Ship with `GatewayResolver` for HTTP gateway resolution.
+/// Ship with `IpfsGatewayResolver` for HTTP gateway resolution.
 /// Implement this trait for custom resolution strategies.
-#[async_trait]
-pub trait DidResolver: Send + Sync {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+pub trait DidDocumentResolver: Send + Sync {
     async fn resolve(&self, did: &str) -> crate::error::Result<Document>;
 
     /// Update resolver cache TTLs at runtime.
@@ -34,33 +33,29 @@ pub trait DidResolver: Send + Sync {
 /// Resolves DID documents via an IPFS/IPNS HTTP gateway.
 ///
 /// The gateway must serve DID documents at `/ipns/<key-id>`.
-#[cfg(not(target_arch = "wasm32"))]
-pub struct GatewayResolver {
+pub struct IpfsGatewayResolver {
     gateways: Vec<String>,
     client: reqwest::Client,
-    positive_ttl_secs: AtomicU64,
-    negative_ttl_secs: AtomicU64,
+    positive_ttl: Mutex<Duration>,
+    negative_ttl: Mutex<Duration>,
     localhost_cooldown: Duration,
     cache: Mutex<HashMap<String, CacheEntry>>,
     localhost_blocked_until: Mutex<Option<Instant>>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 struct CacheEntry {
     expires_at: Instant,
     value: CacheValue,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 enum CacheValue {
     Hit(String),
     Miss(String),
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl GatewayResolver {
+impl IpfsGatewayResolver {
     const LOCALHOST_GATEWAY: &'static str = "http://127.0.0.1:8080/";
     const DEFAULT_PUBLIC_GATEWAYS: [&'static str; 2] = ["https://dweb.link/", "https://w3s.link/"];
 
@@ -74,16 +69,22 @@ impl GatewayResolver {
             push_gateway(&mut gateways, fallback);
         }
 
+        #[cfg(not(target_arch = "wasm32"))]
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(4))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
+        #[cfg(target_arch = "wasm32")]
+        let client = reqwest::Client::builder()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
         Self {
             gateways,
             client,
-            positive_ttl_secs: AtomicU64::new(60),
-            negative_ttl_secs: AtomicU64::new(10),
+            positive_ttl: Mutex::new(Duration::from_mins(1)),
+            negative_ttl: Mutex::new(Duration::from_secs(10)),
             localhost_cooldown: Duration::from_secs(20),
             cache: Mutex::new(HashMap::new()),
             localhost_blocked_until: Mutex::new(None),
@@ -97,18 +98,24 @@ impl GatewayResolver {
     }
 
     fn set_cache_ttls_inner(&self, positive_ttl: Duration, negative_ttl: Duration) {
-        self.positive_ttl_secs
-            .store(positive_ttl.as_secs(), Ordering::Relaxed);
-        self.negative_ttl_secs
-            .store(negative_ttl.as_secs(), Ordering::Relaxed);
+        if let Ok(mut ttl) = self.positive_ttl.lock() {
+            *ttl = positive_ttl;
+        }
+        if let Ok(mut ttl) = self.negative_ttl.lock() {
+            *ttl = negative_ttl;
+        }
     }
 
     fn positive_ttl(&self) -> Duration {
-        Duration::from_secs(self.positive_ttl_secs.load(Ordering::Relaxed))
+        self.positive_ttl
+            .lock()
+            .map_or(Duration::from_secs(0), |ttl| *ttl)
     }
 
     fn negative_ttl(&self) -> Duration {
-        Duration::from_secs(self.negative_ttl_secs.load(Ordering::Relaxed))
+        self.negative_ttl
+            .lock()
+            .map_or(Duration::from_secs(0), |ttl| *ttl)
     }
 
     #[must_use]
@@ -118,9 +125,9 @@ impl GatewayResolver {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-#[async_trait]
-impl DidResolver for GatewayResolver {
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl DidDocumentResolver for IpfsGatewayResolver {
     async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
         let parsed = did_ma::Did::try_from(did).map_err(crate::error::Error::Validation)?;
         let did_key = did.to_string();
@@ -227,8 +234,7 @@ impl DidResolver for GatewayResolver {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl GatewayResolver {
+impl IpfsGatewayResolver {
     fn read_cache(
         &self,
         did: &str,
@@ -274,7 +280,6 @@ impl GatewayResolver {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn normalize_gateway_url(input: &str) -> String {
     let mut url = input.trim().to_string();
     if !url.ends_with('/') {
@@ -283,7 +288,6 @@ fn normalize_gateway_url(input: &str) -> String {
     url
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn push_gateway(gateways: &mut Vec<String>, candidate: &str) {
     let normalized = normalize_gateway_url(candidate);
     if !gateways.iter().any(|g| g.eq_ignore_ascii_case(&normalized)) {
@@ -291,7 +295,6 @@ fn push_gateway(gateways: &mut Vec<String>, candidate: &str) {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn is_localhost_gateway(gateway: &str) -> bool {
     gateway.starts_with("http://127.0.0.1:") || gateway.starts_with("http://localhost:")
 }

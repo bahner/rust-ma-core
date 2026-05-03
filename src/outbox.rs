@@ -1,7 +1,7 @@
 //! Transport-agnostic send handle to a remote ma service.
 //!
 //! An `Outbox` wraps the transport details and exposes only
-//! `send()` + `close()`. Created via [`crate::iroh::IrohEndpoint::outbox`].
+//! `send()` + `close()`.
 //!
 //! `send()` takes a [`Message`], validates it,
 //! serializes to CBOR, and transmits. Malformed or expired messages
@@ -15,30 +15,34 @@
 //! outbox.close();
 //! ```
 
-use crate::error::Result;
-use crate::iroh::channel::Channel;
+use crate::error::{Error, Result};
+use async_trait::async_trait;
 use did_ma::Message;
+
+#[async_trait]
+pub(crate) trait OutboxWire: Send + std::fmt::Debug {
+    async fn send_payload(&mut self, payload: &[u8]) -> Result<()>;
+    fn close_box(self: Box<Self>);
+}
 
 /// A transport-agnostic write handle to a remote service.
 ///
 /// The caller doesn't need to know the underlying transport.
 #[derive(Debug)]
 pub struct Outbox {
-    inner: OutboxTransport,
+    inner: Option<Box<dyn OutboxWire>>,
     did: String,
     protocol: String,
 }
 
-#[derive(Debug)]
-enum OutboxTransport {
-    Channel(Channel),
-}
-
 impl Outbox {
-    /// Create an outbox backed by a channel.
-    pub(crate) fn from_channel(channel: Channel, did: String, protocol: String) -> Self {
+    /// Create an outbox backed by a transport implementation.
+    pub(crate) fn from_transport<T>(transport: T, did: String, protocol: String) -> Self
+    where
+        T: OutboxWire + 'static,
+    {
         Self {
-            inner: OutboxTransport::Channel(channel),
+            inner: Some(Box::new(transport)),
             did,
             protocol,
         }
@@ -53,8 +57,9 @@ impl Outbox {
     pub async fn send(&mut self, message: &Message) -> Result<()> {
         message.headers().validate()?;
         let cbor = message.to_cbor()?;
-        match &mut self.inner {
-            OutboxTransport::Channel(channel) => channel.send(&cbor).await,
+        match self.inner.as_mut() {
+            Some(transport) => transport.send_payload(&cbor).await,
+            None => Err(Error::ConnectionClosed("outbox is closed".to_string())),
         }
     }
 
@@ -71,9 +76,9 @@ impl Outbox {
     }
 
     /// Close the outbox gracefully.
-    pub fn close(self) {
-        match self.inner {
-            OutboxTransport::Channel(channel) => channel.close(),
+    pub fn close(mut self) {
+        if let Some(transport) = self.inner.take() {
+            transport.close_box();
         }
     }
 }

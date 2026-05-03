@@ -1,7 +1,7 @@
 //! DID document publishing to IPFS/IPNS.
 //!
 //! Provides request/response types, validation, and (with the `kubo` feature)
-//! the [`KuboDidPublisher`] for publishing signed DID documents via the
+//! the [`IpfsDidPublisher`] for publishing signed DID documents via the
 //! `ma/ipfs/0.0.1` service.
 
 use anyhow::{anyhow, Result};
@@ -49,12 +49,12 @@ pub struct ValidatedIpfsPublish {
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 #[derive(Clone, Debug)]
-pub struct KuboDidPublisher {
+pub struct IpfsDidPublisher {
     kubo_url: String,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-impl KuboDidPublisher {
+impl IpfsDidPublisher {
     pub fn new(kubo_url: impl AsRef<str>) -> Result<Self> {
         let kubo_url = normalize_kubo_url(kubo_url.as_ref())?;
         Ok(Self { kubo_url })

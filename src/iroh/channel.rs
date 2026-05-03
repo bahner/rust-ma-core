@@ -3,10 +3,12 @@
 //! A `Channel` wraps an iroh `Connection` + `SendStream` for sending
 //! one-way messages. Created via [`crate::iroh::IrohEndpoint::open`].
 
+use async_trait::async_trait;
 use iroh::endpoint::{Connection, SendStream};
 use tokio::io::AsyncWriteExt;
 
 use crate::error::{Error, Result};
+use crate::outbox::OutboxWire;
 
 /// A persistent write-only handle to a remote endpoint on a specific protocol.
 ///
@@ -51,5 +53,16 @@ impl Channel {
 impl Drop for Channel {
     fn drop(&mut self) {
         let _ = self.send.finish();
+    }
+}
+
+#[async_trait]
+impl OutboxWire for Channel {
+    async fn send_payload(&mut self, payload: &[u8]) -> Result<()> {
+        self.send(payload).await
+    }
+
+    fn close_box(self: Box<Self>) {
+        (*self).close();
     }
 }

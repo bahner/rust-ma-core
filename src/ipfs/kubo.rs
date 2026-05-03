@@ -12,8 +12,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
 
-pub const DEFAULT_KUBO_API_URL: &str = "http://127.0.0.1:5001";
-
 // ─── Response types ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]

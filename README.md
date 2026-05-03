@@ -14,16 +14,17 @@ to any specific runtime or application.
   Per-message TTL is computed from each message's `created_at + ttl`. Only
   endpoint implementations push to an inbox; consumers read via
   `pop`/`peek`/`drain`.
-- **`Outbox`** — transport-agnostic write handle for fire-and-forget delivery.
-  Takes a `Message`, validates, serializes to CBOR, and transmits.
+- **Outbound delivery** — transport-agnostic fire-and-forget send path.
+  Messages are validated, serialized to CBOR, and transmitted.
 
 ### Service model
 
 - **`Service` trait** — declares a protocol identifier and label.
 - **`MaEndpoint` trait** — shared interface for all transport endpoints:
   register services, get inboxes, send messages.
-- **`IrohEndpoint`** (behind `iroh` feature) — iroh QUIC-backed implementation
-  of `MaEndpoint`.
+
+The crate currently ships with an iroh-based transport backend internally,
+but iroh-specific types are considered backend details.
 
 Every endpoint must provide `ma/inbox/0.0.1`. Endpoints may optionally
 provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
@@ -33,8 +34,8 @@ provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
 - **`validate_ipfs_publish_request`** — decodes a signed CBOR message,
   enforces `application/x-ma-ipfs-request` content type, validates the document,
   verifies sender matches IPNS identity.
-- **`KuboDidPublisher`** (non-WASM, `kubo` feature) — publishes validated
-  documents to IPFS via Kubo RPC.
+- **`IpfsDidPublisher`** (non-WASM, `kubo` feature) — publishes validated
+  documents to IPFS via the native RPC backend.
 - **`publish_did_document_to_kubo`** / **`handle_ipfs_publish`** — lower-level
   publish helpers.
 
@@ -43,21 +44,15 @@ provide `ma/ipfs/0.0.1` to publish DID documents on behalf of others.
 When using iroh transport, update DID metadata from the live endpoint before
 publishing at startup:
 
-```rust
-let mut endpoint = IrohEndpoint::new(secret_bytes).await?;
-
-// Optional service registrations here.
-let _inbox = endpoint.service("/ma/inbox/0.0.1");
-
-if endpoint.reconcile_document_ma_iroh(&mut document)? {
-    // Re-sign and publish only when metadata changed.
-}
-```
+1. Start your endpoint backend.
+2. Register required services.
+3. Reconcile `ma.iroh` fields from live endpoint state.
+4. Re-sign and publish only when reconciliation reports changes.
 
 ### DID resolution
 
-- **`DidResolver` trait** — async DID-to-Document resolution.
-- **`GatewayResolver`** — resolves via an IPFS/IPNS HTTP gateway.
+- **`DidDocumentResolver` trait** — async DID-to-Document resolution.
+- **`IpfsGatewayResolver`** — resolves via an IPFS/IPNS HTTP gateway.
 
 ### Transport parsing
 
@@ -77,18 +72,20 @@ Parses DID document service strings like `/iroh/<endpoint-id>/ma/inbox/0.0.1`:
 - `pin_update_add_rm` — pin new CID, unpin old, report unpin failures as
   metadata (not hard errors).
 
-### Kubo RPC (non-WASM, `kubo` feature)
+### Native IPFS RPC (non-WASM, `kubo` feature)
 
-HTTP client for Kubo `/api/v0/` endpoints: add, cat, DAG put/get,
+HTTP client for `/api/v0/` endpoints: add, cat, DAG put/get,
 IPNS publish/resolve, key management, pinning.
 
 ## Feature flags
 
+These are Cargo compile-time feature flags.
+
 | Feature  | Default | Description |
 |----------|---------|-------------|
-| `kubo`   | no      | Kubo RPC client for IPFS publishing |
-| `iroh`   | yes     | Iroh QUIC transport (`IrohEndpoint`, `Channel`, `Outbox`) |
-| `gossip` | yes     | Iroh gossip helpers (`join_gossip_topic`, `gossip_send`, broadcast helpers) |
+| `kubo`   | no      | Native IPFS RPC backend for publishing |
+| `iroh`   | yes     | Internal iroh QUIC transport backend |
+| `gossip` | yes     | Internal iroh gossip support |
 | `config` | no      | Config model + YAML serialization + encrypted secret bundles (CLI/fs/logging remain native-only) |
 
 ### `config` feature
@@ -136,7 +133,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = Config::from_args(&cli.ma, MA_DEFAULT_SLUG)?;
     config.init_logging()?;
-  let _resolver = config.gateway_resolver();
+  let _resolver = config.ipfs_gateway_resolver();
     Ok(())
 }
 ```
@@ -156,17 +153,17 @@ Core types (`Inbox`, `Service`, transport parsing, validation)
 compile on all targets including `wasm32-unknown-unknown`.
 
 - This library is intended for both wasm and native targets.
-- All IPFS-related functionality is native-only and unavailable on wasm.
-- On wasm builds, the `ipfs` module and Kubo/IPFS helpers are not compiled in.
+- `IpfsGatewayResolver` is available on both wasm and native for gateway-based DID fetch.
+- Only Kubo write/pin operations are native-only.
+- On wasm builds, the native `kubo` module is not compiled in.
 - `config` model serialization and `SecretBundle` crypto are available on wasm.
 - `config` filesystem and CLI/env facilities are native-only.
-- `GatewayResolver` is native-only.
 - `iroh` transport compiles on wasm and native.
 - `gossip` is optional and can be enabled when needed.
 
-Important: ma-core does not provide IPFS/Kubo access for wasm. If your wasm
-application needs IPFS operations, use a wasm-capable IPFS client in the app
-layer.
+Important: ma-core does provide gateway-based DID fetch on wasm via
+`IpfsGatewayResolver`. Native-only IPFS RPC operations (publish/pin/write)
+remain unavailable on wasm.
 
 For wasm storage, persist encrypted `SecretBundle` bytes and serialized `Config`
 text in browser storage, and provide the passphrase from user input at runtime
@@ -192,12 +189,12 @@ while let Some(msg) = inbox.pop(now) {
 }
 ```
 
-Example: full publish flow against Kubo (native only):
+Example: full publish flow against native IPFS RPC (native only):
 
 ```rust
 #[cfg(not(target_arch = "wasm32"))]
 async fn publish(message_cbor: &[u8]) -> anyhow::Result<()> {
-  let publisher = ma_core::KuboDidPublisher::new("http://127.0.0.1:5001/api/v0")?;
+  let publisher = ma_core::IpfsDidPublisher::new("http://127.0.0.1:5001/api/v0")?;
   let response = publisher.publish_signed_message(message_cbor).await?;
     println!("ok={} did={:?} cid={:?}", response.ok, response.did, response.cid);
     Ok(())
@@ -206,11 +203,11 @@ async fn publish(message_cbor: &[u8]) -> anyhow::Result<()> {
 
 ## End-to-end operational flow
 
-This section shows a concrete native-only flow for publishing a DID document through Kubo.
+This section shows a concrete native-only flow for publishing a DID document through native IPFS RPC.
 
 ### 1. Preconditions
 
-- Kubo API is reachable at whichever base URL your environment uses.
+- Native IPFS RPC API is reachable at whichever base URL your environment uses.
 - Create a publisher once with that URL and reuse the same instance.
 - You have a signed CBOR `Message` payload where
   `content_type` is `application/x-ma-ipfs-request`,
@@ -220,7 +217,7 @@ This section shows a concrete native-only flow for publishing a DID document thr
 
 ### 2. Validate and publish
 
-Use `KuboDidPublisher` when you want a persisted endpoint configuration:
+Use `IpfsDidPublisher` when you want a persisted endpoint configuration:
 
 ```rust
 #[cfg(not(target_arch = "wasm32"))]
@@ -228,7 +225,7 @@ pub async fn publish_from_wire(
   kubo_url: &str,
   message_cbor: &[u8],
 ) -> anyhow::Result<ma_core::IpfsPublishDidResponse> {
-  let publisher = ma_core::KuboDidPublisher::new(kubo_url)?;
+  let publisher = ma_core::IpfsDidPublisher::new(kubo_url)?;
   publisher.publish_signed_message(message_cbor).await
 }
 ```
@@ -247,7 +244,7 @@ After publish, resolve the IPNS name and compare to expected CID path:
 ```rust
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn verify_publish(
-  publisher: &ma_core::KuboDidPublisher,
+  publisher: &ma_core::IpfsDidPublisher,
   ipns_id: &str,
   expected_cid: &str,
 ) -> anyhow::Result<()> {
@@ -262,7 +259,7 @@ pub async fn verify_publish(
 
 Recommended startup/publish order:
 
-1. create `KuboDidPublisher::new(kubo_url)` once
+1. create `IpfsDidPublisher::new(kubo_url)` once
 1. call `publisher.wait_until_ready(attempts)`
 1. decode transport bytes
 1. call `publisher.publish_signed_message(...)`
@@ -277,7 +274,7 @@ pub async fn publish_with_readiness(
   kubo_url: &str,
   message_cbor: &[u8],
 ) -> anyhow::Result<ma_core::IpfsPublishDidResponse> {
-  let publisher = ma_core::KuboDidPublisher::new(kubo_url)?;
+  let publisher = ma_core::IpfsDidPublisher::new(kubo_url)?;
   publisher.wait_until_ready(5).await?;
   let response = publisher.publish_signed_message(message_cbor).await?;
   Ok(response)

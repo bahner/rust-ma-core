@@ -13,8 +13,7 @@ use crate::error::{Error, Result};
 use crate::inbox::Inbox;
 use crate::iroh::channel::Channel;
 use crate::outbox::Outbox;
-use crate::resolve::DidResolver;
-use crate::transport::{resolve_endpoint_for_protocol, transport_string};
+use crate::transport::transport_string;
 use did_ma::{now_iso_utc, Document, Ipld, Message};
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -130,43 +129,6 @@ impl IrohEndpoint {
             addr = addr.with_relay_url(relay_url.clone());
         }
         Ok(addr)
-    }
-
-    /// Open a transport-agnostic [`Outbox`] to a remote DID on a given protocol.
-    ///
-    /// Resolves the DID document, finds a matching service for the
-    /// requested protocol, and opens a persistent channel.
-    ///
-    /// # Errors
-    /// Returns an error if DID resolution fails, no matching service exists,
-    /// route parsing fails, or connection setup cannot complete.
-    pub async fn outbox(
-        &self,
-        resolver: &dyn DidResolver,
-        did: &str,
-        protocol: &str,
-    ) -> Result<Outbox> {
-        let doc = resolver.resolve(did).await?;
-
-        let services = doc
-            .ma
-            .as_ref()
-            .and_then(|ma| ma.get("services").ok().flatten())
-            .and_then(|services| serde_json::to_value(services).ok());
-        let endpoint_id =
-            resolve_endpoint_for_protocol(services.as_ref(), protocol).ok_or_else(|| {
-                Error::NoInboxTransport(format!("{did} has no service for {protocol}"))
-            })?;
-
-        let route = extract_ma_iroh_route(doc.ma.as_ref());
-        let addr = self.resolve_addr_with_route(&endpoint_id, route)?;
-
-        let channel = self.open_addr(addr, protocol).await?;
-        Ok(Outbox::from_channel(
-            channel,
-            did.to_string(),
-            protocol.to_string(),
-        ))
     }
 
     /// Shut down the endpoint.
@@ -333,6 +295,23 @@ impl MaEndpoint for IrohEndpoint {
             .iter()
             .map(|proto| transport_string(&id, proto))
             .collect()
+    }
+
+    async fn connect_outbox(
+        &self,
+        doc: &Document,
+        endpoint_id: &str,
+        did: &str,
+        protocol: &str,
+    ) -> Result<Outbox> {
+        let route = extract_ma_iroh_route(doc.ma.as_ref());
+        let addr = self.resolve_addr_with_route(endpoint_id, route)?;
+        let channel = self.open_addr(addr, protocol).await?;
+        Ok(Outbox::from_transport(
+            channel,
+            did.to_string(),
+            protocol.to_string(),
+        ))
     }
 
     async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()> {

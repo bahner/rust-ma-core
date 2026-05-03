@@ -8,10 +8,10 @@
 //!   to IPFS/IPNS (via Kubo on native targets).
 //! - **Service inboxes** — bounded, TTL-aware FIFO queues ([`Inbox`])
 //!   for receiving validated messages on named protocol services.
-//! - **Outbox sending** — fire-and-forget delivery of validated [`Message`] objects
-//!   to remote endpoints, serialized to CBOR on the wire ([`Outbox`]).
-//! - **Endpoint abstraction** — the [`MaEndpoint`] trait with an iroh-backed
-//!   implementation ([`IrohEndpoint`], behind the `iroh` feature).
+//! - **Outbound sending** — fire-and-forget delivery of validated [`Message`] objects
+//!   to remote endpoints, serialized to CBOR on the wire.
+//! - **Endpoint abstraction** — the [`MaEndpoint`] trait with pluggable
+//!   transport backends.
 //! - **Transport parsing** — extract endpoint IDs and protocols from DID document
 //!   service strings (`/iroh/<id>/<protocol>`).
 //! - **Identity bootstrap** — secure secret key generation and persistence.
@@ -24,10 +24,9 @@
 //!
 //! ## Feature flags
 //!
-//! - **`kubo`** — enables Kubo RPC client for IPFS publishing (native only).
-//! - **`iroh`** — enables the iroh QUIC transport backend ([`IrohEndpoint`],
-//!   [`Channel`], [`Outbox`]).
-//! - **`gossip`** — enables iroh-gossip broadcast helpers.
+//! - **`kubo`** — enables native IPFS RPC backend for publishing (native only).
+//! - **`iroh`** — enables the internal iroh QUIC transport backend.
+//! - **`gossip`** — enables internal iroh-gossip broadcast support.
 //! - **`config`** — enables [`Config`], [`SecretBundle`], and [`MaArgs`] for
 //!   YAML-based daemon configuration, encrypted secret bundles, and CLI
 //!   argument parsing.
@@ -35,18 +34,18 @@
 //! ## Platform support
 //!
 //! Core types (`Inbox`, `Service`, transport parsing, validation)
-//! compile on all targets including `wasm32-unknown-unknown`. Kubo/IPFS
-//! traffic requires a native target.
+//! compile on all targets including `wasm32-unknown-unknown`.
 //!
 //! ### wasm vs native
 //!
 //! - `ma-core` supports both wasm and native targets.
-//! - All IPFS-related APIs are native-only (`not(wasm32)` + `kubo` feature).
-//! - wasm builds do not expose the `ipfs` module or Kubo/IPFS helpers.
+//! - `IpfsGatewayResolver` (HTTP gateway DID fetch) is available on wasm and native.
+//! - Native IPFS RPC write/pin APIs are native-only (`not(wasm32)` + `kubo` feature).
+//! - wasm builds expose only `ipfs::gateway_resolver` (no native RPC helpers).
 //! - `config` serialization and `SecretBundle` crypto work on wasm.
 //! - `config` filesystem paths, CLI/env merging, and file I/O are native-only.
-//! - If your wasm application needs IPFS access, use a wasm-capable IPFS
-//!   client in the application layer.
+//! - If your wasm application needs native IPFS RPC write/pin operations, provide
+//!   them in a native companion layer.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -70,13 +69,13 @@ pub mod error;
 pub mod identity;
 pub mod inbox;
 pub mod interfaces;
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub mod ipfs;
 #[cfg(feature = "iroh")]
-pub mod iroh;
+#[allow(dead_code)]
+mod iroh;
 #[cfg(feature = "iroh")]
-pub mod outbox;
-pub mod resolve;
+#[allow(dead_code)]
+mod outbox;
 pub mod service;
 pub mod topic;
 pub mod transport;
@@ -117,28 +116,17 @@ pub use topic::{topic_id, Topic, TopicId};
 
 pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
 #[cfg(feature = "iroh")]
-pub use iroh::channel::Channel;
-#[cfg(feature = "iroh")]
-pub use iroh::IrohEndpoint;
-#[cfg(feature = "iroh")]
 pub use outbox::Outbox;
 
-// ─── Re-export iroh primitives so dependents don't need a direct iroh dep ───
-
+/// Create a default ma endpoint backend from 32-byte secret key material.
+///
+/// This keeps the transport backend type internal while exposing
+/// [`MaEndpoint`] and [`Outbox`] as stable API surfaces.
 #[cfg(feature = "iroh")]
-pub use ::iroh::endpoint::{presets, Connection, RecvStream, SendStream};
-#[cfg(feature = "iroh")]
-pub use ::iroh::protocol::{AcceptError, ProtocolHandler, Router};
-#[cfg(feature = "iroh")]
-pub use ::iroh::{Endpoint, EndpointAddr, EndpointId, RelayUrl, SecretKey};
-
-// ─── Re-export gossip helpers ────────────────────────────────────────────────
-
-#[cfg(feature = "gossip")]
-pub use iroh::gossip::{
-    broadcast_topic_id, gossip_send, gossip_send_text, join_broadcast_channel, join_gossip_topic,
-    topic_id_for,
-};
+pub async fn new_ma_endpoint(secret_bytes: [u8; 32]) -> Result<Box<dyn MaEndpoint>> {
+    let endpoint = iroh::new_endpoint(secret_bytes).await?;
+    Ok(Box::new(endpoint))
+}
 
 // ─── Re-export transport parsing ────────────────────────────────────────────
 
@@ -161,12 +149,9 @@ pub use config::{BrowserIdentityExport, Config, SecretBundle};
 
 // ─── Re-export DID resolution ───────────────────────────────────────────────
 
-pub use resolve::DidResolver;
-#[cfg(not(target_arch = "wasm32"))]
-pub use resolve::GatewayResolver;
+pub use ipfs::gateway_resolver::{DidDocumentResolver, IpfsGatewayResolver};
 
 // ─── Re-export existing modules ─────────────────────────────────────────────
 
 pub use interfaces::{DidPublisher, IpfsPublisher};
-#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub use ipfs::*;
