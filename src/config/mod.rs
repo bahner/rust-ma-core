@@ -223,24 +223,24 @@ pub(crate) fn write_secure(path: &Path, data: &[u8]) -> Result<()> {
 
 /// Check that a file's permissions are not wider than `0600` and log a
 /// warning if they are. Only active on Unix.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), unix))]
 fn check_permissions(path: &Path) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if let Ok(meta) = std::fs::metadata(path) {
-            let mode = meta.mode() & 0o777;
-            if mode > 0o600 {
-                tracing::warn!(
-                    path = %path.display(),
-                    mode = format!("{mode:04o}"),
-                    "config file has permissions wider than 0600 — consider `chmod 0600 {}`",
-                    path.display()
-                );
-            }
+    use std::os::unix::fs::MetadataExt;
+    if let Ok(meta) = std::fs::metadata(path) {
+        let mode = meta.mode() & 0o777;
+        if mode > 0o600 {
+            tracing::warn!(
+                path = %path.display(),
+                mode = format!("{mode:04o}"),
+                "config file has permissions wider than 0600 — consider `chmod 0600 {}`",
+                path.display()
+            );
         }
     }
 }
+
+#[cfg(all(not(target_arch = "wasm32"), not(unix)))]
+fn check_permissions(_path: &Path) {}
 
 // ─── YAML helpers ────────────────────────────────────────────────────────────
 
