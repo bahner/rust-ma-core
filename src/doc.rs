@@ -1,4 +1,3 @@
-use cid::Cid;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use ipld_core::ipld::Ipld;
 use serde::{Deserialize, Serialize};
@@ -348,8 +347,6 @@ pub struct Document {
     #[serde(rename = "keyAgreement")]
     pub key_agreement: Vec<String>,
     pub proof: Proof,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identity: Option<String>,
     #[serde(rename = "createdAt")]
     pub created_at: String,
     #[serde(rename = "updatedAt")]
@@ -372,7 +369,6 @@ impl Document {
             assertion_method: Vec::new(),
             key_agreement: Vec::new(),
             proof: Proof::default(),
-            identity: None,
             created_at: now.clone(),
             updated_at: now,
             ma: None,
@@ -457,13 +453,6 @@ impl Document {
             .iter()
             .find(|method| method.id == method_id)
             .ok_or_else(|| MaError::UnknownVerificationMethod(method_id.to_string()))
-    }
-
-    pub fn set_identity(&mut self, identity: impl Into<String>) -> Result<()> {
-        let identity = identity.into();
-        Cid::try_from(identity.as_str()).map_err(|_| MaError::InvalidIdentity)?;
-        self.identity = Some(identity);
-        Ok(())
     }
 
     /// Update the `updatedAt` timestamp to the current time.
@@ -580,10 +569,6 @@ impl Document {
 
         for controller in &self.controller {
             Did::validate(controller)?;
-        }
-
-        if let Some(identity) = &self.identity {
-            Cid::try_from(identity.as_str()).map_err(|_| MaError::InvalidIdentity)?;
         }
 
         if !is_valid_rfc3339_utc(&self.created_at) {

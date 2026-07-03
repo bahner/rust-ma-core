@@ -82,8 +82,6 @@ pub enum MaError {
     InvalidCreatedAt(String),
     #[error("invalid updatedAt timestamp: {0}")]
     InvalidUpdatedAt(String),
-    #[error("identity CID is invalid")]
-    InvalidIdentity,
     #[error("missing envelope field: {0}")]
     MissingEnvelopeField(&'static str),
     #[error("invalid ephemeral key length")]
