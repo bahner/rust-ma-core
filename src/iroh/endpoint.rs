@@ -191,6 +191,105 @@ impl IrohEndpoint {
         }
     }
 
+    /// Spawn a per-connection `accept_bi()` loop on an **outbound** connection
+    /// so that streams the remote opens on it reach the correct inbox.
+    ///
+    /// The iroh `Router` only watches connections from `endpoint.accept()`
+    /// (connections the remote dialled into us).  When we dial out first and
+    /// the remote caches and reuses *our* connection to send its next message
+    /// (exactly what a NAT-ed browser peer does), the Router never sees those
+    /// streams — without this loop they are silently discarded and the peer's
+    /// messages black-hole.  Mirrors the wasm loop in [`get_or_connect`] and
+    /// the inbound path in [`InboxProtocolHandler::accept`].
+    ///
+    /// The loop exits when the connection closes (`accept_bi` fails).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn spawn_outbound_accept_loop(&self, connection: &Connection, protocol: &str) {
+        let normalized = normalize_protocol(protocol);
+        let Some(inbox) = self.inboxes.get(&normalized) else {
+            // No local service registered for this protocol — nothing could
+            // consume inbound streams, so don't spawn a loop.
+            return;
+        };
+        let inbox = inbox.clone();
+        let conn = connection.clone();
+        tokio::spawn(async move {
+            loop {
+                let (mut send, mut recv) = match conn.accept_bi().await {
+                    Ok(streams) => streams,
+                    Err(err) => {
+                        debug!(
+                            protocol = %normalized,
+                            remote = %conn.remote_id(),
+                            error = %err,
+                            "outbound connection closed; accept loop ended"
+                        );
+                        break;
+                    }
+                };
+                let inbox = inbox.clone();
+                let proto = normalized.clone();
+                let remote = conn.remote_id();
+                tokio::spawn(async move {
+                    let payload = match timeout(
+                        DEFAULT_INBOUND_READ_TIMEOUT,
+                        recv.read_to_end(DEFAULT_MAX_INBOUND_MESSAGE_SIZE),
+                    )
+                    .await
+                    {
+                        Ok(Ok(payload)) => payload,
+                        Ok(Err(err)) => {
+                            warn!(
+                                protocol = %proto,
+                                remote = %remote,
+                                error = %err,
+                                "failed to read inbound stream on outbound connection"
+                            );
+                            let _ = send.finish();
+                            return;
+                        }
+                        Err(_elapsed) => {
+                            warn!(
+                                protocol = %proto,
+                                remote = %remote,
+                                "inbound stream read on outbound connection timed out — dropping stream"
+                            );
+                            let _ = send.finish();
+                            return;
+                        }
+                    };
+
+                    let _ = send.finish();
+
+                    let message = match Message::decode(&payload) {
+                        Ok(message) => message,
+                        Err(err) => {
+                            warn!(
+                                protocol = %proto,
+                                remote = %remote,
+                                error = %err,
+                                "invalid inbound message payload on outbound connection"
+                            );
+                            return;
+                        }
+                    };
+
+                    if let Err(err) = message.headers().validate() {
+                        warn!(
+                            protocol = %proto,
+                            remote = %remote,
+                            error = %err,
+                            "invalid inbound message headers on outbound connection"
+                        );
+                        return;
+                    }
+
+                    inbox.push(now_secs(), message.exp, message);
+                });
+            }
+        });
+    }
+
     /// Evict the cache entry for `cache_key` only if the current entry is
     /// already closed.
     ///
@@ -281,6 +380,12 @@ impl IrohEndpoint {
             .lock()
             .unwrap()
             .insert(cache_key, connection.clone());
+
+        // The remote may cache and reuse this connection for its own sends;
+        // service those streams so they are not black-holed (the Router only
+        // watches inbound connections).
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_outbound_accept_loop(&connection, protocol);
 
         Ok(Channel::new(connection, send))
     }
@@ -435,6 +540,13 @@ impl IrohEndpoint {
             .lock()
             .unwrap()
             .insert(cache_key, connection.clone());
+
+        // The iroh Router only watches connections from endpoint.accept().
+        // When the remote reuses our outbound connection to send its next
+        // message (NAT-ed browser peers do exactly this), the Router never
+        // sees those streams — service them here so they reach the inbox.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.spawn_outbound_accept_loop(&connection, protocol);
 
         // In WASM the iroh Router only watches connections from endpoint.accept()
         // (connections the remote dialled into us). When the remote reuses our
@@ -1039,6 +1151,66 @@ mod tests {
         );
 
         endpoint.close().await;
+    }
+
+    // Reproduces the "runtime stops receiving RPC after dialling out" bug:
+    // A dials B (A's connection is cached on both sides), then B *reuses* the
+    // cached inbound connection to send back to A.  Without the outbound
+    // accept loop, A's Router never sees B's stream and the message
+    // black-holes.  With the fix it must arrive in A's inbox.
+    #[tokio::test]
+    #[ignore = "requires iroh network runtime"]
+    async fn outbound_connection_receives_reply_streams() {
+        use super::IrohEndpoint;
+        use crate::endpoint::MaEndpoint;
+
+        let mut secret_a = test_secret();
+        secret_a[1] = 1;
+        let mut secret_b = test_secret();
+        secret_b[1] = 2;
+
+        let mut a = IrohEndpoint::new(secret_a, true).await.unwrap();
+        let mut b = IrohEndpoint::new(secret_b, true).await.unwrap();
+        let a_inbox = a.service("/ma/rpc/0.0.1");
+        let _b_inbox = b.service("/ma/rpc/0.0.1");
+
+        // A dials B (as the runtime does when delivering a reply to a peer
+        // that never dialled it first).
+        a.send_to(&b.id(), "/ma/rpc/0.0.1", &test_message())
+            .await
+            .expect("A -> B send failed");
+
+        // Give B's accept handler time to cache the inbound connection.
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        assert!(
+            b.connection_cache
+                .lock()
+                .unwrap()
+                .contains_key(&(a.id(), "/ma/rpc/0.0.1".to_string())),
+            "B should have cached the inbound connection from A"
+        );
+
+        // B sends to A — send_to's cache fast path reuses the inbound
+        // connection A dialled up, exercising A's outbound accept loop.
+        b.send_to(&a.id(), "/ma/rpc/0.0.1", &test_message())
+            .await
+            .expect("B -> A send failed");
+
+        // The message must arrive in A's inbox.
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if !a_inbox.is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "BUG: message sent over A's outbound connection never reached A's inbox"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+
+        a.close().await;
+        b.close().await;
     }
 
     // ─── Pure unit tests (no network) ────────────────────────────────────────

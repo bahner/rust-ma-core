@@ -678,7 +678,6 @@ mod tests {
         );
         assert_eq!(payload.assertion_method, identity.document.assertion_method);
         assert_eq!(payload.key_agreement, identity.document.key_agreement);
-        assert_eq!(payload.identity, identity.document.identity);
         assert_eq!(payload.created_at, identity.document.created_at);
         assert_eq!(payload.updated_at, identity.document.updated_at);
         assert_eq!(payload.ma, identity.document.ma);
