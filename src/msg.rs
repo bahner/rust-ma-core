@@ -40,8 +40,8 @@ pub fn decode_content(content: &[u8]) -> crate::error::MaResult<(u64, Vec<u8>)> 
 fn codec_for(content_type: &str) -> u64 {
     match content_type {
         "application/vnd.ipld.dag-cbor" => crate::multiformat::CODEC_DAG_CBOR,
-        // application/x-ma-term: CBOR term — bare atom (:ok, :pong) or tuple ([:verb, ...]).
-        "application/cbor" | "application/x-ma-term" => crate::multiformat::CODEC_CBOR,
+        // application/vnd.ma.term: CBOR term — bare atom (:ok, :pong) or tuple ([:verb, ...]).
+        "application/cbor" | "application/vnd.ma.term" => crate::multiformat::CODEC_CBOR,
         _ => crate::multiformat::CODEC_IDENTITY,
     }
 }
@@ -93,12 +93,12 @@ impl Headers {
         let recipient_is_empty = self.to.trim().is_empty();
 
         match self.message_type.as_str() {
-            "application/x-ma-broadcast" => {
+            crate::service::MESSAGE_TYPE_BROADCAST => {
                 if !recipient_is_empty {
                     return Err(MaError::BroadcastMustNotHaveRecipient);
                 }
             }
-            "application/x-ma-message" => {
+            crate::service::MESSAGE_TYPE_MESSAGE => {
                 if recipient_is_empty {
                     return Err(MaError::MessageRequiresRecipient);
                 }
@@ -140,7 +140,7 @@ impl Headers {
 /// let msg = Message::new(
 ///     sender.document.id.clone(),
 ///     recipient.document.id.clone(),
-///     "application/x-ma-message",
+///     "application/vnd.ma.message",
 ///     "text/plain",
 ///     b"hello",
 ///     &signing_key,
@@ -445,7 +445,7 @@ impl ReplayGuard {
 /// let msg = Message::new(
 ///     alice.document.id.clone(),
 ///     bob.document.id.clone(),
-///     "application/x-ma-message",
+///     "application/vnd.ma.message",
 ///     "text/plain",
 ///     b"secret",
 ///     &alice_key,
@@ -795,7 +795,7 @@ mod tests {
         let message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             &sender_signing,
@@ -823,7 +823,7 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             &sender_signing,
@@ -841,7 +841,7 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             &sender_signing,
@@ -863,7 +863,7 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             &sender_signing,
@@ -886,7 +886,7 @@ mod tests {
         let mut message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             &sender_signing,
@@ -910,7 +910,7 @@ mod tests {
         let mut message = Message::new_with_exp(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             now_secs + 60,
@@ -935,7 +935,7 @@ mod tests {
         let message = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"look",
             &sender_signing,
@@ -965,7 +965,7 @@ mod tests {
         let message = Message::new(
             sender_document.id.clone(),
             String::new(),
-            "application/x-ma-broadcast",
+            "application/vnd.ma.broadcast",
             "text/plain",
             b"hello everyone",
             &sender_signing,
@@ -983,7 +983,7 @@ mod tests {
         let result = Message::new(
             sender_document.id.clone(),
             recipient_document.id.clone(),
-            "application/x-ma-broadcast",
+            "application/vnd.ma.broadcast",
             "text/plain",
             b"hello everyone",
             &sender_signing,
@@ -1001,7 +1001,7 @@ mod tests {
         let result = Message::new(
             sender_document.id.clone(),
             String::new(),
-            "application/x-ma-message",
+            "application/vnd.ma.message",
             "text/plain",
             b"secret",
             &sender_signing,

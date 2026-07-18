@@ -161,7 +161,7 @@ loop {
                 let reply = build_reply(&msg, &bundle)?;
                 outbox.send(&reply).await?;
             }
-            "application/x-ma-rpc" => {
+            "application/vnd.ma.rpc.request" => {
                 dispatch_rpc(&msg, &state).await?;
             }
             _ => {}

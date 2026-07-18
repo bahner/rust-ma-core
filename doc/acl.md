@@ -42,7 +42,8 @@ service protocols:
 |------------|----------------|
 | "inbox" | Deliver messages via `/ma/inbox/0.0.1` |
 | "rpc" | Send RPC calls via `/ma/rpc/0.0.1` |
-| "ipfs" | Publish DID documents via `/ma/ipfs/0.0.1` |
+| "ipfs" | Store generic content via `/ma/ipfs/0.0.1` (fire-and-forget) |
+| "identity-publish" | Publish DID documents via `/ma/ipfs/0.0.1` |
 | "crud" | Access the CRUD service via `/ma/crud/0.0.1` |
 | "read" | Read entities, config, namespace contents |
 | "create" | Create new namespaces or entities |

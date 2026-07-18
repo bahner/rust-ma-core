@@ -37,9 +37,9 @@ src/
   ipfs/
     mod.rs            — public re-exports for ipfs sub-modules
     gateway_resolver.rs — IpfsGatewayResolver, DidDocumentResolver trait
-    publish.rs        — IpfsRequestPayload, IpfsDidPublisher (unified CBOR),
-                        generate_ipfs_publish_request, generate_ipfs_store_request,
-                        validate_ipfs_publish_request, validate_ipfs_request
+    publish.rs        — IdentityPublishRequest, IpfsStoreRequest, IpfsDidPublisher,
+                        generate_identity_publish_request, generate_ipfs_store_request,
+                        validate_identity_publish_request, validate_ipfs_request
   iroh/               — internal iroh QUIC backend (not public API)
   key.rs              — SigningKey, EncryptionKey
   kubo/               — internal Kubo RPC client (not public API)

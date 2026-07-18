@@ -217,7 +217,7 @@ See [doc/wasm.md](doc/wasm.md) for the full wasm story, including the
   Register services by protocol ID; each gives you an `Inbox<Message>` to
   drain. Transport service strings are parsed by helpers in `transport.rs`.
 - **IPFS publishing** — wasm endpoints cannot reach Kubo directly. They build
-  a signed `application/x-ma-ipfs-request` message and send it to a
+  a signed `application/vnd.ma.identity.publish.request` message and send it to a
   `ma-runtime` instance over iroh, which validates and publishes on their
   behalf. See [doc/ipfs-publish.md](doc/ipfs-publish.md).
 - **ACL** — `check_cap(&acl, sender_did, cap)` with deny-wins semantics.

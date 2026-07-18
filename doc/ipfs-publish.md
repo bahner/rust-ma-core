@@ -63,12 +63,12 @@ preference, new service endpoints, etc.).
 ## Building the publish request (browser / wasm side)
 
 The browser side of the publish flow lives in `ma-core::ipfs::publish`.
-The key function is `generate_ipfs_publish_request`, which takes the user's
+The key function is `generate_identity_publish_request`, which takes the user's
 `SecretBundle` and the runtime's DID, and produces a signed `Message` ready
 to send:
 
 ```rust,ignore
-use ma_core::{generate_ipfs_publish_request, config::SecretBundle};
+use ma_core::{generate_identity_publish_request, config::SecretBundle};
 use ma_core::doc::MaExtension;
 
 async fn publish_identity(
@@ -80,12 +80,12 @@ async fn publish_identity(
     let ext = MaExtension::new().kind("agent").lang("nb");
     let document = bundle.build_document(&ext)?;
 
-    // generate_ipfs_publish_request builds a Message whose content contains:
+    // generate_identity_publish_request builds a Message whose content contains:
     //   - the DAG-CBOR encoded document
     //   - the 32-byte IPNS secret key (the runtime will zeroize this)
     // The message is signed with the sender's did_signing_key and encrypted
     // for the runtime's did_encryption_key.
-    let request = generate_ipfs_publish_request(bundle, runtime_did)?;
+    let request = generate_identity_publish_request(bundle, runtime_did)?;
 
     // Send the signed CBOR bytes to the runtime over iroh on /ma/ipfs/0.0.1.
     send_on_ipfs_protocol(runtime_did, request.to_cbor()?).await?;
@@ -105,7 +105,7 @@ not the IPNS key. The runtime uses the signature to verify that the request
 ## Handling the request (runtime / native side)
 
 On the runtime side, incoming messages on `/ma/ipfs/0.0.1` are passed to
-`validate_ipfs_request` before anything else happens. Validation is not
+`validate_identity_publish_request` before anything else happens. Validation is not
 optional and cannot be skipped — `IpfsDidPublisher::publish_signed_message`
 calls it internally:
 
@@ -138,7 +138,7 @@ match publisher.publish_signed_message(&raw_cbor_bytes).await {
 What does validation actually check? It verifies the following in order:
 
 - The bytes decode as valid CBOR and fit the expected message structure.
-- The message content type is exactly `application/x-ma-ipfs-request`.
+- The message content type is exactly `application/vnd.ma.identity.publish.request`.
 - The outer message signature is valid, confirming the sender holds the
   private key corresponding to their DID document's signing verification
   method.
@@ -149,7 +149,10 @@ What does validation actually check? It verifies the following in order:
   someone else's DID.
 - The message ID has not been seen before within the last 120 seconds
   (replay protection).
-- The sender's DID has the "ipfs" capability in the ACL.
+- The sender's DID has the `identity-publish` capability in the ACL. This is
+  a separate capability from generic `ipfs` content storage (see below),
+  since publishing identity documents transmits an IPNS secret key and may
+  warrant tighter access control.
 
 Only after all of these pass does the runtime call Kubo.
 
@@ -182,14 +185,18 @@ let document = resolver.resolve("did:ma:k51qzi5uqu5dgutdk9yovnzvqf7h0z3lfb2tl41i
 println!("found: {}", document.id);
 ```
 
-## Storing content on IPFS (the store variant)
+## Storing content on IPFS (a separate message type)
 
 Publishing a DID document is not the only thing you can send to the runtime
-on `/ma/ipfs/0.0.1`. The `generate_ipfs_store_request` function builds a
-request to store arbitrary content — a document, a configuration blob, an
-entity definition — on IPFS without touching IPNS. The runtime stores the
-bytes via `dag/put` and replies with the resulting CID. The browser can then
-reference content by CID in its DID document or share it with other identities.
+on `/ma/ipfs/0.0.1`. The `generate_ipfs_store_request` function builds an
+`application/vnd.ma.ipfs.request` request to store arbitrary content — a
+document, a configuration blob, an entity definition — on IPFS without
+touching IPNS. This is a distinct message type from identity-publish and is
+gated by the plain `ipfs` capability (fire-and-forget content storage,
+deliberately less sensitive than publishing an identity). The runtime stores
+the bytes via `dag/put` and replies with the resulting CID. The browser can
+then reference content by CID in its DID document or share it with other
+identities.
 
 ```rust,ignore
 use ma_core::generate_ipfs_store_request;

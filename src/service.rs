@@ -35,15 +35,21 @@ pub const CRUD_PROTOCOL_ID: &str = "/ma/crud/0.0.1";
 
 // ─── Message types (routing / dispatch category) ────────────────────────────
 
-pub const MESSAGE_TYPE_BROADCAST: &str = "application/x-ma-broadcast";
-pub const MESSAGE_TYPE_CHAT: &str = "application/x-ma-chat";
-pub const MESSAGE_TYPE_EMOTE: &str = "application/x-ma-emote";
-pub const MESSAGE_TYPE_MESSAGE: &str = "application/x-ma-message";
-pub const MESSAGE_TYPE_IPFS_REQUEST: &str = "application/x-ma-ipfs-request";
-pub const MESSAGE_TYPE_IPFS_STORE: &str = "application/x-ma-ipfs-store";
-pub const MESSAGE_TYPE_DOC: &str = "application/x-ma-doc";
-pub const MESSAGE_TYPE_RPC: &str = "application/x-ma-rpc";
-pub const MESSAGE_TYPE_RPC_REPLY: &str = "application/x-ma-rpc-reply";
+pub const MESSAGE_TYPE_BROADCAST: &str = "application/vnd.ma.broadcast";
+pub const MESSAGE_TYPE_CHAT: &str = "application/vnd.ma.chat";
+pub const MESSAGE_TYPE_EMOTE: &str = "application/vnd.ma.emote";
+pub const MESSAGE_TYPE_MESSAGE: &str = "application/vnd.ma.message";
+/// DID-document publish request — transmits an IPNS secret key so the
+/// publisher can sign/publish the caller's `did:ma` document. Requires the
+/// `identity-publish` ACL capability (see `ma_core::acl::CAP_IDENTITY_PUBLISH`).
+pub const MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST: &str =
+    "application/vnd.ma.identity.publish.request";
+/// Generic IPFS content-store request — fire-and-forget. Requires the
+/// `ipfs` ACL capability (see `ma_core::acl::CAP_IPFS`).
+pub const MESSAGE_TYPE_IPFS_REQUEST: &str = "application/vnd.ma.ipfs.request";
+pub const MESSAGE_TYPE_DOC: &str = "application/vnd.ma.doc";
+pub const MESSAGE_TYPE_RPC: &str = "application/vnd.ma.rpc.request";
+pub const MESSAGE_TYPE_RPC_REPLY: &str = "application/vnd.ma.rpc.reply";
 
 // ─── CRUD message types (/ma/crud/0.0.1) ────────────────────────────────────
 //
@@ -52,8 +58,8 @@ pub const MESSAGE_TYPE_RPC_REPLY: &str = "application/x-ma-rpc-reply";
 //   SET:    [":path",   value]        value = scalar or "/ipfs/…", "/ipns/…", "/ipld/…"
 //   DELETE: [":delete", ":path"]
 
-pub const MESSAGE_TYPE_CRUD: &str = "application/x-ma-crud";
-pub const MESSAGE_TYPE_CRUD_REPLY: &str = "application/x-ma-crud-reply";
+pub const MESSAGE_TYPE_CRUD: &str = "application/vnd.ma.crud.request";
+pub const MESSAGE_TYPE_CRUD_REPLY: &str = "application/vnd.ma.crud.reply";
 
 // ─── Content types (inner payload format) ───────────────────────────────────
 
@@ -61,14 +67,11 @@ pub const CONTENT_TYPE_CBOR: &str = "application/cbor";
 /// CBOR term — either a bare atom (`:ok`, `:pong`) or a tuple (CBOR array whose first element
 /// is a dispatchable atom, e.g. `[:ok, data]` or `[:error, reason]`).
 /// Used as `contentType` for RPC and CRUD messages.
-pub const CONTENT_TYPE_TERM: &str = "application/x-ma-term";
+pub const CONTENT_TYPE_TERM: &str = "application/vnd.ma.term";
 /// Raw CBOR data payload — e.g. an `EntityNode` struct or a `Vec<String>` names list.
 /// The `+cbor` suffix follows RFC 6838 §4.2.8 structured-syntax conventions.
-pub const CONTENT_TYPE_TERM_CBOR: &str = "application/x-ma-term+cbor";
-/// CID pointer — the CBOR payload is a text string holding a `CIDv1` that
-/// addresses a DAG-CBOR node in IPFS.  Receivers should fetch and decode it.
-pub const CONTENT_TYPE_TERM_DAG_CBOR: &str = "application/x-ma-term+dag-cbor";
+pub const CONTENT_TYPE_TERM_CBOR: &str = "application/vnd.ma.term+cbor";
 /// Inline YAML string — the CBOR payload is a text string containing a
 /// UTF-8 YAML document.  Suitable for config values (scalars, sequences,
 /// mappings) that do not need to be stored as separate IPFS objects.
-pub const CONTENT_TYPE_TERM_YAML: &str = "application/x-ma-term+yaml";
+pub const CONTENT_TYPE_TERM_YAML: &str = "application/vnd.ma.term+yaml";

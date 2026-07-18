@@ -10,7 +10,8 @@
 //! | Capability | Meaning |
 //! |------------|---------|
 //! | `"rpc"`    | Send RPC messages via `/ma/rpc/0.0.1` |
-//! | `"ipfs"`   | Publish DID documents via `/ma/ipfs/0.0.1` |
+//! | `"ipfs"`   | Store generic content via `/ma/ipfs/0.0.1` |
+//! | `"identity-publish"` | Publish DID documents via `/ma/ipfs/0.0.1` |
 //! | `"read"`   | Read entities, config, and namespace contents |
 //! | `"create"` | Create new namespaces or entities |
 //! | `"update"` | Update existing namespaces or entities |
@@ -68,8 +69,14 @@ use crate::{Error, Result};
 pub const CAP_INBOX: &str = "inbox";
 /// Send RPC messages via `/ma/rpc/0.0.1`.
 pub const CAP_RPC: &str = "rpc";
-/// Publish DID documents via `/ma/ipfs/0.0.1`.
+/// Store generic content via `/ma/ipfs/0.0.1` (fire-and-forget).
 pub const CAP_IPFS: &str = "ipfs";
+/// Publish DID documents via `/ma/ipfs/0.0.1`.
+///
+/// Separated from [`CAP_IPFS`] because identity-publish transmits an IPNS
+/// secret key and may need to be gated more tightly than generic content
+/// storage.
+pub const CAP_IDENTITY_PUBLISH: &str = "identity-publish";
 /// Access the structured CRUD service via `/ma/crud/0.0.1`.
 pub const CAP_CRUD: &str = "crud";
 /// Read entities, config, and namespace contents.
