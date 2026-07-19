@@ -76,7 +76,7 @@ let ext = MaExtension::new()
     .kind("agent")   // "agent" for interactive endpoints, "runtime" for daemons
     .lang("en");     // BCP-47 language tag
 
-let document = bundle.build_document(&ext)?;
+let document = bundle.build_document(ext)?;
 
 // Encode to DAG-CBOR bytes for storage in IPFS.
 let cbor = document.encode()?;

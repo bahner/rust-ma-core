@@ -15,7 +15,7 @@ endpoint, you get back an inbox for that service's protocol:
 ```rust,ignore
 use ma_core::{new_ma_endpoint, service::{INBOX_PROTOCOL_ID, RPC_PROTOCOL_ID}};
 
-let mut endpoint = new_ma_endpoint(bundle.iroh_secret_key).await?;
+let mut endpoint = new_ma_endpoint(bundle.iroh_secret_key, true).await?;
 
 let inbox     = endpoint.service(INBOX_PROTOCOL_ID);
 let rpc_inbox = endpoint.service(RPC_PROTOCOL_ID);
@@ -40,7 +40,7 @@ fn now_secs() -> u64 {
 
 // Pop one message, or None if the inbox is empty.
 if let Some(msg) = inbox.pop(now_secs()) {
-    println!("from {}: {}", msg.from(), String::from_utf8_lossy(msg.content()));
+    println!("from {}: {}", msg.from, String::from_utf8_lossy(&msg.payload()));
 }
 
 // Or drain everything that has arrived since last time.

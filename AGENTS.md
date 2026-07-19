@@ -58,9 +58,8 @@ src/
 | Feature  | Default | Description |
 |----------|---------|-------------|
 | `iroh`   | yes     | iroh QUIC transport backend |
-| `gossip` | yes     | iroh-gossip broadcast (requires `iroh`) |
 | `kubo`   | no      | Native Kubo RPC — publish/pin/add (non-wasm only) |
-| `acl`    | no      | AclMap, check_op, Permissions, permission bits |
+| `acl`    | no      | AclMap, check_cap, CapabilityEntry, capability constants |
 | `config` | no      | Config, SecretBundle, MaArgs, BrowserIdentityExport |
 
 `kubo` and the `kubo` sub-module are **always** guarded by
@@ -137,6 +136,5 @@ so `did:ma:foo#bar` and `did:ma:foo` match the same entry.
 - `make test` only checks `--all-features`. Run `make check` separately to
   validate compilation without optional features.
 - Doctests in `src/msg.rs` use `b"..."` byte literals (not `.to_vec()`).
-- The `gossip` feature implicitly enables `iroh`.
 - `Config::from_args` requires a `const MA_DEFAULT_SLUG: &str` in the caller's
   crate at compile time.

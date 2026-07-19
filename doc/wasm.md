@@ -20,14 +20,13 @@ uses:
 
 ```toml
 [dependencies]
-ma-core = { version = "0.10", default-features = false, features = ["iroh", "config", "acl"] }
+ma-core = { version = "0.12", default-features = false, features = ["iroh", "config", "acl"] }
 ```
 
-Turning off default features is important because the default set includes
-`gossip`, which you may not need, and more critically it avoids accidentally
-pulling in any native-only code paths. The three features above give you
-everything a browser endpoint needs: the iroh QUIC transport, the identity
-and config model, and the ACL for inbound message filtering.
+Turning off default features gives browser applications explicit control over
+which optional APIs they compile. The three features above give you everything
+a browser endpoint needs: the iroh QUIC transport, the identity and config
+model, and the ACL for inbound message filtering.
 
 You do **not** need to add `getrandom` with `js` feature to your own
 `Cargo.toml`. `ma-core` declares the wasm-specific dependencies itself:
@@ -146,7 +145,7 @@ fn build_my_document(bundle: &SecretBundle) -> anyhow::Result<Vec<u8>> {
         .kind("agent")           // this endpoint is an interactive agent
         .lang("nb");             // the user's preferred language
 
-    let document = bundle.build_document(&ext)?;
+    let document = bundle.build_document(ext)?;
 
     // document.encode() gives you DAG-CBOR bytes, suitable for IPFS.
     // If you want the JSON representation for debugging, use document.to_json().
@@ -202,9 +201,6 @@ the wasm target:
 ```bash
 # The profile used by ma-agent:
 cargo check --target wasm32-unknown-unknown --no-default-features --features "iroh,config,acl"
-
-# If you also need gossip broadcast in your wasm build:
-cargo check --target wasm32-unknown-unknown --no-default-features --features "iroh,config,acl,gossip"
 ```
 
 The one feature you must never enable on wasm is `kubo`. It will fail at

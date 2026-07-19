@@ -78,7 +78,7 @@ async fn publish_identity(
     // The MaExtension carries the type and language that go into the
     // DID document. build_document signs the document with did_signing_key.
     let ext = MaExtension::new().kind("agent").lang("nb");
-    let document = bundle.build_document(&ext)?;
+    let document = bundle.build_document(ext)?;
 
     // generate_identity_publish_request builds a Message whose content contains:
     //   - the DAG-CBOR encoded document

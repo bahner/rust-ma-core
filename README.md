@@ -6,34 +6,52 @@ browser tab, a server daemon, or anywhere Rust compiles to.
 
 ## What is 間
 
-間 is an actor model over a peer-to-peer network. Every participant is a
-`did:ma:` identity — a stable, cryptographically-rooted address derived from an
-IPNS key. Actors communicate exclusively by passing signed, encrypted messages;
-there is no shared state and no central broker. Each actor has an inbox and
-can publish its own DID document to IPFS so others can look it up and dial in.
+間 (`ma`) is the protocol and runtime model for addressable actors. A `ma`
+actor is an independently owned endpoint with a `did:ma:` identity, a DID
+document, one or more protocol services, and an inbox for messages addressed to
+those services. Actors do not share memory or reach into each other's state.
+They send signed messages, optionally encrypted for the recipient, and the
+receiver decides what to do from the message type, content type, and service
+protocol it arrived on.
+
+The unit of addressability is the DID. A bare DID such as `did:ma:<id>` names
+an identity; a DID URL such as `did:ma:<id>#room` names an actor or entity
+inside that identity's published document. Well-known services use `/ma/...`
+protocol IDs: `/ma/inbox/0.0.1` for direct delivery, `/ma/rpc/0.0.1` for
+request/reply style actor calls, `/ma/ipfs/0.0.1` for publishing support, and
+`/ma/crud/0.0.1` for structured resource access. Those strings are the contract
+between peers. The transport only carries bytes; `ma` defines what the bytes
+mean.
+
+This makes `ma` a small actor system rather than a single application. A
+browser tab can be an interactive `ma-agent`; a server process can be a
+`ma-runtime`; a wasm plugin can be one actor within that runtime. They all use
+the same message envelope, identity model, service IDs, ACL checks, and DID
+document fields. The implementation can vary, but the actor contract stays the
+same.
 
 The architecture is deliberately close to what Erlang/OTP does with processes,
-but instead of a single VM the actors live on an iroh QUIC overlay network that
-punches through NAT and works from a browser tab just as well as from a server.
-An actor running as a wasm page and one running as a Linux daemon can exchange
-messages directly, with the same code on both sides.
+but without one shared VM. The process boundary is the `ma` message boundary:
+state stays local, communication is explicit, and every cross-actor interaction
+is a message that can be signed, verified, routed, filtered, replay-checked,
+and stored without special knowledge of the receiver's internals.
 
-`ma-core` is the crate that makes all of that composable. It handles identity,
-messages, transport, and access control in one place so that `ma-agent`
-(the browser WASM frontend) and `ma-runtime` (the server daemon) can share a
-single implementation.
+`ma-core` is the crate that makes that protocol composable. It handles
+identity, documents, messages, envelopes, service inboxes, outbound delivery,
+transport service strings, DID resolution, and access control in one place so
+that `ma-agent` and `ma-runtime` can share a single implementation.
 
 ## Getting a feel for it
 
 Create an identity and build a DID document in a few lines:
 
 ```rust,ignore
-use ma_core::config::{SecretBundle, MaExtension};
+use ma_core::{MaExtension, SecretBundle};
 
 let bundle = SecretBundle::generate();
 println!("my DID: did:ma:{}", bundle.ipns_id()?);
 
-let doc = bundle.build_document(&MaExtension::new().kind("agent"))?;
+let doc = bundle.build_document(MaExtension::new().kind("agent"))?;
 let cbor = doc.encode()?; // ready for IPFS dag/put
 ```
 
@@ -41,8 +59,9 @@ Start an iroh endpoint, register a service, and receive messages:
 
 ```rust,ignore
 use ma_core::{new_ma_endpoint, service::{INBOX_PROTOCOL_ID, RPC_PROTOCOL_ID}};
+use web_time::{SystemTime, UNIX_EPOCH};
 
-let mut endpoint = new_ma_endpoint(bundle.iroh_secret_key).await?;
+let mut endpoint = new_ma_endpoint(bundle.iroh_secret_key, true).await?;
 
 let mut inbox  = endpoint.service(INBOX_PROTOCOL_ID);
 let mut rpc_in = endpoint.service(RPC_PROTOCOL_ID);
@@ -50,24 +69,39 @@ let mut rpc_in = endpoint.service(RPC_PROTOCOL_ID);
 // The service strings for the DID document are ready as soon as you register.
 let services = endpoint.services(); // include in build_document's MaExtension
 
-// Drain the inbox in a loop.
-while let Some(msg) = inbox.recv().await {
-    println!("from {}: {}", msg.from, String::from_utf8_lossy(msg.content()));
+let now = SystemTime::now()
+    .duration_since(UNIX_EPOCH)
+    .unwrap_or_default()
+    .as_secs();
+
+// Drain everything currently queued and not expired.
+for msg in inbox.drain(now) {
+    println!("from {}: {}", msg.from, String::from_utf8_lossy(&msg.payload()));
 }
 ```
 
 Send an encrypted message to another actor — all you need is their DID:
 
 ```rust,ignore
-use ma_core::{Message, Envelope, IpfsGatewayResolver, ipfs::gateway_resolver::DidDocumentResolver};
+use ma_core::{
+    Envelope, IpfsGatewayResolver, Message,
+    ipfs::gateway_resolver::DidDocumentResolver,
+    service::MESSAGE_TYPE_MESSAGE,
+};
 
 // Resolve the recipient's DID document to get their encryption key.
 let resolver = IpfsGatewayResolver::new("http://127.0.0.1:5001");
 let their_doc = resolver.resolve("did:ma:k51qzi5uqu5d…").await?;
 
 // Sign with your key, encrypt for them.
-let msg = Message::new(&bundle.did()?, &their_doc.did, "text/plain",
-                       b"hello from the other side", &bundle.signing_key()?)?;
+let msg = Message::new(
+    bundle.did()?,
+    their_doc.did.clone(),
+    MESSAGE_TYPE_MESSAGE,
+    "text/plain",
+    b"hello from the other side",
+    &bundle.signing_key()?,
+)?;
 let envelope = Envelope::encrypt(&msg, &their_doc)?;
 
 // Send via iroh outbox.
@@ -82,7 +116,7 @@ message:
 use ma_core::{check_cap, CAP_RPC};
 
 // One call, deny-wins semantics, works identically on wasm and native.
-check_cap(&acl, msg.from(), CAP_RPC)?;
+check_cap(&acl, &msg.from, CAP_RPC)?;
 ```
 
 ## What the crate covers
@@ -130,10 +164,12 @@ let outbox = endpoint.outbox(&resolver, &their_did, INBOX_PROTOCOL_ID).await?;
 outbox.send(&envelope).await?;
 ```
 
-iroh also powers the gossip broadcast layer when the `gossip` feature is
-enabled. A topic is a 32-byte hash; any endpoint subscribed to the same topic
-receives broadcasts from the others. This is how 間 actors can do fan-out
-messaging without a message broker.
+The current transport surface is direct service messaging: a sender resolves a
+DID document, chooses one of the recipient's advertised `/ma/...` service
+protocols, and sends a signed message over the corresponding iroh connection.
+Fan-out, topic subscription, and higher-level broadcast policy belong above
+`ma-core`; the crate still defines the broadcast message type and validation
+rules, but transport remains direct service-to-service delivery.
 
 ## IPFS, IPNS, and IPLD as the data layer
 
@@ -185,7 +221,6 @@ document format and the message wire protocol.
 | Feature   | Default | What it enables |
 |-----------|---------|-----------------|
 | `iroh`    | yes     | iroh QUIC transport backend, `new_ma_endpoint`, `Outbox` |
-| `gossip`  | yes     | iroh-gossip broadcast (requires `iroh`) |
 | `kubo`    | no      | Native Kubo RPC — publish, pin, DAG put/get, key management (non-wasm only) |
 | `acl`     | no      | `AclMap`, `check_cap`, capability constants, group principals |
 | `config`  | no      | `Config`, `SecretBundle`, `BrowserIdentityExport`; plus native-only `MaArgs`, `Config::from_args`, filesystem helpers |
@@ -213,7 +248,7 @@ See [doc/wasm.md](doc/wasm.md) for the full wasm story, including the
   `Envelope` encrypts it for a recipient. `ReplayGuard` blocks duplicates.
   `Inbox` and `Outbox` hide all transport details behind simple send/receive
   interfaces — see [doc/messaging.md](doc/messaging.md).
-- **Transport** — `new_ma_endpoint(secret_bytes)` starts an iroh endpoint.
+- **Transport** — `new_ma_endpoint(secret_bytes, ipv6)` starts an iroh endpoint.
   Register services by protocol ID; each gives you an `Inbox<Message>` to
   drain. Transport service strings are parsed by helpers in `transport.rs`.
 - **IPFS publishing** — wasm endpoints cannot reach Kubo directly. They build
@@ -226,7 +261,7 @@ See [doc/wasm.md](doc/wasm.md) for the full wasm story, including the
 ## Build and test
 
 ```bash
-cargo build          # default features (iroh + gossip)
+cargo build          # default features (iroh)
 
 cargo test
 

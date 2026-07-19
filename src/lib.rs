@@ -20,14 +20,17 @@
 //!
 //! ## Services
 //!
-//! Every endpoint must provide `/ma/inbox/0.0.1` (the default inbox).
-//! Endpoints may optionally provide `ma/ipfs/0.0.1` to publish DID documents
+//! Every endpoint should provide `/ma/inbox/0.0.1` (the default inbox) when it
+//! wants to receive direct messages. Endpoints may optionally provide
+//! `/ma/ipfs/0.0.1` to publish DID documents
 //! on behalf of others.
 //!
 //! ## Feature flags
 //!
 //! - **`kubo`** — enables native IPFS RPC backend for publishing (native only).
 //! - **`iroh`** — enables the internal iroh QUIC transport backend.
+//! - **`acl`** — enables [`AclMap`], [`check_cap`], capability constants, and
+//!   ACL validation helpers.
 //! - **`config`** — enables [`Config`], [`SecretBundle`], and [`MaArgs`] for
 //!   YAML-based daemon configuration, encrypted secret bundles, and CLI
 //!   argument parsing. Also provides [`config::SecretBundle::build_document`] and

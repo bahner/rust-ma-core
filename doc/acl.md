@@ -106,7 +106,7 @@ entire group.
 Add the feature to your `Cargo.toml`:
 
 ```toml
-ma-core = { version = "0.10", features = ["acl"] }
+ma-core = { version = "0.12", features = ["acl"] }
 ```
 
 Loading an ACL from a file and checking a capability looks like this:
