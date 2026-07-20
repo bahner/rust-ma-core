@@ -4,7 +4,7 @@
 //! the [`IpfsDidPublisher`] for publishing signed DID documents via the
 //! `ma/ipfs/0.0.1` service.
 
-use crate::{Did, Document, Message};
+use crate::{Did, Document, Ipld, Message};
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +47,80 @@ fn encode_cbor<T: Serialize>(payload: &T) -> Result<Vec<u8>> {
     ciborium::ser::into_writer(payload, &mut buf)
         .map_err(|e| anyhow!("failed to encode CBOR payload: {}", e))?;
     Ok(buf)
+}
+
+fn sanitize_key_part(part: &str) -> String {
+    let mut sanitized = String::new();
+    let mut last_was_separator = false;
+
+    for byte in part.bytes() {
+        let ch = byte as char;
+        if ch.is_ascii_alphanumeric() {
+            sanitized.push(ch.to_ascii_lowercase());
+            last_was_separator = false;
+        } else if ch == '-' || ch == '_' {
+            if !last_was_separator && !sanitized.is_empty() {
+                sanitized.push(ch);
+                last_was_separator = true;
+            }
+        } else if !last_was_separator && !sanitized.is_empty() {
+            sanitized.push('-');
+            last_was_separator = true;
+        }
+    }
+
+    while sanitized.ends_with(['-', '_']) {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn document_ma_type(document: &Document) -> &str {
+    match document.ma.as_ref() {
+        Some(Ipld::Map(map)) => match map.get("type") {
+            Some(Ipld::String(kind)) => kind,
+            _ => "unknown",
+        },
+        _ => "unknown",
+    }
+}
+
+/// Build a deterministic Kubo IPNS key name from operator-visible parts.
+///
+/// The IPNS identity is only exposed as a short blake3 suffix. Callers may add
+/// local context such as a runtime slug, while delegated agent publishes can
+/// remain anonymous apart from their `ma.type`.
+#[must_use]
+pub fn ipns_key_name_for_parts(parts: &[&str], ipns_id: &str) -> String {
+    let name_parts = if parts.is_empty() {
+        vec!["unknown".to_string()]
+    } else {
+        parts.iter().map(|part| sanitize_key_part(part)).collect()
+    };
+    let hash = blake3::hash(ipns_id.as_bytes());
+    format!(
+        "{}{}-{}",
+        MA_IPNS_ALIAS_HASH_PREFIX,
+        name_parts.join("-"),
+        &hash.to_hex()[..16]
+    )
+}
+
+/// Build the default deterministic Kubo IPNS key name for a DID document.
+///
+/// Uses `ma.type` when present and falls back to `unknown`.
+#[must_use]
+pub fn ipns_key_name_for_document(document: &Document) -> String {
+    let document_did = Did::try_from(document.id.as_str());
+    let ipns_id = document_did
+        .as_ref()
+        .map_or(document.id.as_str(), |did| did.ipns.as_str());
+    ipns_key_name_for_parts(&[document_ma_type(document)], ipns_id)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -303,8 +377,7 @@ pub async fn publish_did_document_to_kubo(
 
     // Deterministic key name derived from the DID IPNS identity.
     // Same DID always maps to the same Kubo key name — idempotent, no cleanup needed.
-    let hash = blake3::hash(document_ipns_id.as_bytes());
-    let key_name = format!("{}{}", MA_IPNS_ALIAS_HASH_PREFIX, &hash.to_hex()[..16]);
+    let key_name = ipns_key_name_for_document(&document);
 
     let existing_key = list_keys(kubo_url)
         .await?
@@ -385,7 +458,7 @@ pub async fn handle_ipfs_publish(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{generate_identity_from_secret, Did, SigningKey};
+    use crate::{generate_identity_from_secret, Did, MaExtension, SigningKey};
 
     #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     use super::normalize_kubo_url;
@@ -401,6 +474,62 @@ mod tests {
             .try_into()
             .expect("private key bytes");
         SigningKey::from_private_key_bytes(sign_url, private_key).expect("signing key")
+    }
+
+    fn expected_key_name(parts: &[&str], ipns_id: &str) -> String {
+        let hash = blake3::hash(ipns_id.as_bytes());
+        format!(
+            "{}{}-{}",
+            MA_IPNS_ALIAS_HASH_PREFIX,
+            parts.join("-"),
+            &hash.to_hex()[..16]
+        )
+    }
+
+    #[test]
+    fn document_key_name_uses_ma_type() {
+        let identity = test_identity(11);
+        let mut document = identity.document.clone();
+        document.set_ma_extension(MaExtension::new().kind("agent"));
+
+        assert_eq!(
+            ipns_key_name_for_document(&document),
+            expected_key_name(&["agent"], &identity.subject_url.ipns)
+        );
+    }
+
+    #[test]
+    fn document_key_name_falls_back_to_unknown_type() {
+        let identity = test_identity(12);
+
+        assert_eq!(
+            ipns_key_name_for_document(&identity.document),
+            expected_key_name(&["unknown"], &identity.subject_url.ipns)
+        );
+    }
+
+    #[test]
+    fn key_name_parts_allow_runtime_slug() {
+        let ipns_id = "k51qzi5uqu5example";
+
+        assert_eq!(
+            ipns_key_name_for_parts(&["runtime", "my-slug"], ipns_id),
+            expected_key_name(&["runtime", "my-slug"], ipns_id)
+        );
+        assert_eq!(
+            ipns_key_name_for_parts(&["runtime", "my-slug", "runtime"], ipns_id),
+            expected_key_name(&["runtime", "my-slug", "runtime"], ipns_id)
+        );
+    }
+
+    #[test]
+    fn key_name_parts_are_sanitized() {
+        let ipns_id = "k51qzi5uqu5example";
+
+        assert_eq!(
+            ipns_key_name_for_parts(&["Runtime", "my slug!", "***"], ipns_id),
+            expected_key_name(&["runtime", "my-slug", "unknown"], ipns_id)
+        );
     }
 
     #[test]

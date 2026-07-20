@@ -162,11 +162,14 @@ Once validation passes, `IpfsDidPublisher` does the following:
 
 1. Calls `/api/v0/dag/put` with the document's DAG-CBOR bytes. Kubo stores
    the document and returns a CID.
-2. Imports the IPNS key into Kubo's keystore under a name derived from a
-   blake3 hash of the identity. Using a deterministic alias means that
-   repeated publishes from the same identity always update the same keystore
-   entry rather than accumulating new ones. The operation is idempotent and
-   avoids unnecessary keystore churn.
+2. Imports the IPNS key into Kubo's keystore under a deterministic alias
+  derived from the document's `ma.type` plus a short blake3 hash of the IPNS
+  identity. For example, an agent document uses `ma-agent-<hash>`, while a
+  document without a usable `ma.type` falls back to `ma-unknown-<hash>`.
+  Using a deterministic alias means that repeated publishes from the same
+  identity always update the same keystore entry rather than accumulating new
+  ones. Native runtimes may add local context such as a slug for their own
+  Kubo keys; delegated agent publishes intentionally do not.
 3. Calls `/api/v0/name/publish` to associate the CID with the IPNS identity.
    The IPNS record is what makes `did:ma:<ipns-id>` resolvable.
 4. Calls `zeroize` on the raw key bytes in memory once the publish call
