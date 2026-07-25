@@ -55,9 +55,7 @@ enum CacheValue {
 }
 
 impl Default for IpfsGatewayResolver {
-    /// Build a resolver using only the built-in gateways (localhost:8080 +
-    /// two public fallbacks). Use [`IpfsGatewayResolver::new`] to add an
-    /// additional primary gateway (e.g. a Kubo node on a non-default port).
+    /// Build a local-first resolver for development and native runtimes.
     fn default() -> Self {
         let mut gateways = Vec::new();
         push_gateway(&mut gateways, Self::LOCALHOST_GATEWAY);
@@ -71,6 +69,7 @@ impl IpfsGatewayResolver {
     const DEFAULT_PUBLIC_GATEWAYS: [&'static str; 2] = ["https://dweb.link/", "https://w3s.link/"];
 
     /// Build a public-gateway resolver with no localhost probing.
+    #[must_use]
     pub fn public_default() -> Self {
         let mut gateways = Vec::new();
         push_default_public_gateways(&mut gateways);
@@ -80,6 +79,7 @@ impl IpfsGatewayResolver {
     /// Build a resolver using the caller-provided primary gateway followed by
     /// the standard public fallbacks. Localhost is used only if `gateway_url`
     /// itself points at localhost.
+    #[must_use]
     pub fn new(gateway_url: impl Into<String>) -> Self {
         let mut gateways = Vec::new();
         push_gateway(&mut gateways, &gateway_url.into());
@@ -436,6 +436,55 @@ mod tests {
         push_gateway(&mut gateways, "https://dweb.link/"); // exact duplicate
         push_gateway(&mut gateways, "https://dweb.link"); // no trailing slash
         assert_eq!(gateways.len(), 1, "duplicates must not be added");
+    }
+
+    #[test]
+    fn default_is_local_first() {
+        use super::IpfsGatewayResolver;
+        let resolver = IpfsGatewayResolver::default();
+        assert_eq!(
+            resolver.gateways,
+            vec![
+                "http://127.0.0.1:8080/".to_string(),
+                "https://dweb.link/".to_string(),
+                "https://w3s.link/".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn public_default_never_includes_localhost() {
+        use super::{is_localhost_gateway, IpfsGatewayResolver};
+        let resolver = IpfsGatewayResolver::public_default();
+        assert_eq!(
+            resolver.gateways,
+            vec![
+                "https://dweb.link/".to_string(),
+                "https://w3s.link/".to_string(),
+            ]
+        );
+        assert!(!resolver
+            .gateways
+            .iter()
+            .any(|gateway| is_localhost_gateway(gateway)));
+    }
+
+    #[test]
+    fn new_uses_primary_then_public_fallbacks_without_hidden_localhost() {
+        use super::{is_localhost_gateway, IpfsGatewayResolver};
+        let resolver = IpfsGatewayResolver::new("https://example.test/ipfs");
+        assert_eq!(
+            resolver.gateways,
+            vec![
+                "https://example.test/ipfs/".to_string(),
+                "https://dweb.link/".to_string(),
+                "https://w3s.link/".to_string(),
+            ]
+        );
+        assert!(!resolver
+            .gateways
+            .iter()
+            .any(|gateway| is_localhost_gateway(gateway)));
     }
 
     #[test]
