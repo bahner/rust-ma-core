@@ -59,7 +59,10 @@ impl Default for IpfsGatewayResolver {
     /// two public fallbacks). Use [`IpfsGatewayResolver::new`] to add an
     /// additional primary gateway (e.g. a Kubo node on a non-default port).
     fn default() -> Self {
-        Self::new(Self::LOCALHOST_GATEWAY)
+        let mut gateways = Vec::new();
+        push_gateway(&mut gateways, Self::LOCALHOST_GATEWAY);
+        push_default_public_gateways(&mut gateways);
+        Self::from_gateway_list(gateways)
     }
 }
 
@@ -67,16 +70,24 @@ impl IpfsGatewayResolver {
     const LOCALHOST_GATEWAY: &'static str = "http://127.0.0.1:8080/";
     const DEFAULT_PUBLIC_GATEWAYS: [&'static str; 2] = ["https://dweb.link/", "https://w3s.link/"];
 
-    pub fn new(gateway_url: impl Into<String>) -> Self {
-        let primary = normalize_gateway_url(&gateway_url.into());
-
+    /// Build a public-gateway resolver with no localhost probing.
+    pub fn public_default() -> Self {
         let mut gateways = Vec::new();
-        push_gateway(&mut gateways, Self::LOCALHOST_GATEWAY);
-        push_gateway(&mut gateways, &primary);
-        for fallback in Self::DEFAULT_PUBLIC_GATEWAYS {
-            push_gateway(&mut gateways, fallback);
-        }
+        push_default_public_gateways(&mut gateways);
+        Self::from_gateway_list(gateways)
+    }
 
+    /// Build a resolver using the caller-provided primary gateway followed by
+    /// the standard public fallbacks. Localhost is used only if `gateway_url`
+    /// itself points at localhost.
+    pub fn new(gateway_url: impl Into<String>) -> Self {
+        let mut gateways = Vec::new();
+        push_gateway(&mut gateways, &gateway_url.into());
+        push_default_public_gateways(&mut gateways);
+        Self::from_gateway_list(gateways)
+    }
+
+    fn from_gateway_list(gateways: Vec<String>) -> Self {
         #[cfg(not(target_arch = "wasm32"))]
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(4))
@@ -338,6 +349,12 @@ fn push_gateway(gateways: &mut Vec<String>, candidate: &str) {
     let normalized = normalize_gateway_url(candidate);
     if !gateways.iter().any(|g| g.eq_ignore_ascii_case(&normalized)) {
         gateways.push(normalized);
+    }
+}
+
+fn push_default_public_gateways(gateways: &mut Vec<String>) {
+    for fallback in IpfsGatewayResolver::DEFAULT_PUBLIC_GATEWAYS {
+        push_gateway(gateways, fallback);
     }
 }
 
