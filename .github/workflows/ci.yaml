@@ -18,6 +18,16 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
           - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build: cross
+            test_args: ""
+            rustflags: ""
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-musl
+            build: cross
+            test_args: --no-run
+            rustflags: "-A linker-messages"
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -35,14 +45,42 @@ jobs:
         if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
+      - name: Install cross
+        if: matrix.build == 'cross'
+        run: |
+          if ! command -v cross >/dev/null 2>&1; then
+            cargo install cross --locked
+          fi
+
       - name: Run tests
+        if: matrix.build != 'cross'
         run: cargo test --all-features --target ${{ matrix.target }}
 
+      - name: Run cross tests
+        if: matrix.build == 'cross'
+        run: cross test --all-features --target ${{ matrix.target }} ${{ matrix.test_args }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
       - name: Run clippy
+        if: matrix.build != 'cross'
         run: cargo clippy --all-features --target ${{ matrix.target }} -- -D warnings
 
+      - name: Run cross clippy
+        if: matrix.build == 'cross'
+        run: cross clippy --all-features --target ${{ matrix.target }} -- -D warnings
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
+
       - name: Check no-default-features
+        if: matrix.build != 'cross'
         run: cargo check --no-default-features --target ${{ matrix.target }}
+
+      - name: Cross check no-default-features
+        if: matrix.build == 'cross'
+        run: cross check --no-default-features --target ${{ matrix.target }}
+        env:
+          RUSTFLAGS: ${{ matrix.rustflags }}
 
   wasm:
     runs-on: ubuntu-latest
