@@ -66,7 +66,8 @@ impl Default for IpfsGatewayResolver {
 
 impl IpfsGatewayResolver {
     const LOCALHOST_GATEWAY: &'static str = "http://127.0.0.1:8080/";
-    const DEFAULT_PUBLIC_GATEWAYS: [&'static str; 2] = ["https://dweb.link/", "https://w3s.link/"];
+    const DEFAULT_PUBLIC_GATEWAYS: [&'static str; 2] =
+        ["https://dweb.link/", "https://4everland.io/"];
 
     /// Build a public-gateway resolver with no localhost probing.
     #[must_use]
@@ -447,7 +448,7 @@ mod tests {
             vec![
                 "http://127.0.0.1:8080/".to_string(),
                 "https://dweb.link/".to_string(),
-                "https://w3s.link/".to_string(),
+                "https://4everland.io/".to_string(),
             ]
         );
     }
@@ -460,7 +461,7 @@ mod tests {
             resolver.gateways,
             vec![
                 "https://dweb.link/".to_string(),
-                "https://w3s.link/".to_string(),
+                "https://4everland.io/".to_string(),
             ]
         );
         assert!(!resolver
@@ -478,7 +479,7 @@ mod tests {
             vec![
                 "https://example.test/ipfs/".to_string(),
                 "https://dweb.link/".to_string(),
-                "https://w3s.link/".to_string(),
+                "https://4everland.io/".to_string(),
             ]
         );
         assert!(!resolver
