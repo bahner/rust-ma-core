@@ -3,7 +3,7 @@
 use crate::Document;
 use async_trait::async_trait;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use web_time::{Duration, Instant};
 
 /// Trait for resolving a DID to its DID document.
@@ -36,6 +36,7 @@ pub struct IpfsGatewayResolver {
     negative_ttl: Mutex<Duration>,
     localhost_cooldown: Duration,
     cache: Mutex<HashMap<String, CacheEntry>>,
+    in_flight: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     localhost_blocked_until: Mutex<Option<Instant>>,
     /// Per-request timeout for WASM fetches.  `None` → use the built-in
     /// 10-second fallback.  Ignored on native (client-level 4 s applies).
@@ -52,6 +53,20 @@ struct CacheEntry {
 enum CacheValue {
     Hit(Vec<u8>),
     Miss(String),
+}
+
+impl CacheValue {
+    fn into_result(self, did: String) -> crate::error::Result<Document> {
+        match self {
+            Self::Hit(body) => {
+                parse_document_bytes(&body).map_err(|detail| crate::error::Error::Resolution {
+                    did,
+                    detail: format!("cached document parse failed: {detail}"),
+                })
+            }
+            Self::Miss(detail) => Err(crate::error::Error::Resolution { did, detail }),
+        }
+    }
 }
 
 impl Default for IpfsGatewayResolver {
@@ -107,6 +122,7 @@ impl IpfsGatewayResolver {
             negative_ttl: Mutex::new(Duration::from_secs(10)),
             localhost_cooldown: Duration::from_secs(20),
             cache: Mutex::new(HashMap::new()),
+            in_flight: Mutex::new(HashMap::new()),
             localhost_blocked_until: Mutex::new(None),
             wasm_request_timeout: Mutex::new(None),
         }
@@ -163,45 +179,21 @@ impl IpfsGatewayResolver {
             *t = timeout;
         }
     }
-}
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
-impl DidDocumentResolver for IpfsGatewayResolver {
-    async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
-        let parsed = crate::Did::try_from(did).map_err(crate::error::Error::Validation)?;
-        let did_key = did.to_string();
-        let positive_ttl = self.positive_ttl();
-        let negative_ttl = self.negative_ttl();
-        let cache_hit_enabled = !positive_ttl.is_zero();
-        let cache_miss_enabled = !negative_ttl.is_zero();
-
-        if let Some(cached) = self.read_cache(&did_key, cache_hit_enabled, cache_miss_enabled) {
-            return match cached {
-                CacheValue::Hit(body) => {
-                    parse_document_bytes(&body).map_err(|detail| crate::error::Error::Resolution {
-                        did: did_key,
-                        detail: format!("cached document parse failed: {detail}"),
-                    })
-                }
-                CacheValue::Miss(detail) => Err(crate::error::Error::Resolution {
-                    did: did_key,
-                    detail,
-                }),
-            };
-        }
-
+    async fn fetch_document(
+        &self,
+        parsed: &crate::Did,
+        now: Instant,
+    ) -> std::result::Result<(Document, Vec<u8>), String> {
         let mut errors = Vec::new();
-        let now = Instant::now();
 
         for gateway in &self.gateways {
             if is_localhost_gateway(gateway) && self.localhost_is_blocked(now) {
-                errors.push(format!("{} -> skipped (cooldown)", gateway));
+                errors.push(format!("{gateway} -> skipped (cooldown)"));
                 continue;
             }
 
             let url = format!("{}ipns/{}", gateway, parsed.ipns);
-
             let req = self
                 .client
                 .get(&url)
@@ -236,7 +228,7 @@ impl DidDocumentResolver for IpfsGatewayResolver {
             }
 
             let body = match response.bytes().await {
-                Ok(body) => body,
+                Ok(body) => body.to_vec(),
                 Err(err) => {
                     if is_localhost_gateway(gateway) {
                         self.block_localhost_until(Some(now + self.localhost_cooldown));
@@ -245,9 +237,8 @@ impl DidDocumentResolver for IpfsGatewayResolver {
                     continue;
                 }
             };
-
-            let doc = match parse_document_bytes(body.as_ref()) {
-                Ok(doc) => doc,
+            let document = match parse_document_bytes(&body) {
+                Ok(document) => document,
                 Err(detail) => {
                     errors.push(format!("{url} -> invalid DID document: {detail}"));
                     continue;
@@ -257,30 +248,63 @@ impl DidDocumentResolver for IpfsGatewayResolver {
             if is_localhost_gateway(gateway) {
                 self.block_localhost_until(None);
             }
+            return Ok((document, body));
+        }
 
-            if cache_hit_enabled {
-                self.write_cache(
-                    did_key.clone(),
-                    CacheValue::Hit(body.to_vec()),
-                    now + positive_ttl,
-                );
+        Err(format!("all gateways failed: {}", errors.join(" | ")))
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+impl DidDocumentResolver for IpfsGatewayResolver {
+    async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
+        let parsed = crate::Did::try_from(did).map_err(crate::error::Error::Validation)?;
+        let did_key = did.to_string();
+        let positive_ttl = self.positive_ttl();
+        let negative_ttl = self.negative_ttl();
+        let cache_hit_enabled = !positive_ttl.is_zero();
+        let cache_miss_enabled = !negative_ttl.is_zero();
+
+        if let Some(cached) = self.read_cache(&did_key, cache_hit_enabled, cache_miss_enabled) {
+            return cached.into_result(did_key);
+        }
+
+        let resolve_lock = self.resolve_lock(&did_key);
+        let _resolve_guard = resolve_lock.lock().await;
+
+        // Another caller may have populated the cache while this caller waited
+        // for the per-DID lock.
+        if let Some(cached) = self.read_cache(&did_key, cache_hit_enabled, cache_miss_enabled) {
+            self.release_resolve_lock(&did_key, &resolve_lock);
+            return cached.into_result(did_key);
+        }
+
+        let now = Instant::now();
+        match self.fetch_document(&parsed, now).await {
+            Ok((document, body)) => {
+                if cache_hit_enabled {
+                    self.write_cache(did_key.clone(), CacheValue::Hit(body), now + positive_ttl);
+                }
+                self.release_resolve_lock(&did_key, &resolve_lock);
+                Ok(document)
             }
-            return Ok(doc);
+            Err(detail) => {
+                tracing::warn!(did = %did_key, error = %detail, "DID document resolve failed");
+                if cache_miss_enabled {
+                    self.write_cache(
+                        did_key.clone(),
+                        CacheValue::Miss(detail.clone()),
+                        now + negative_ttl,
+                    );
+                }
+                self.release_resolve_lock(&did_key, &resolve_lock);
+                Err(crate::error::Error::Resolution {
+                    did: did_key,
+                    detail,
+                })
+            }
         }
-
-        let detail = format!("all gateways failed: {}", errors.join(" | "));
-        if cache_miss_enabled {
-            self.write_cache(
-                did_key.clone(),
-                CacheValue::Miss(detail.clone()),
-                now + negative_ttl,
-            );
-        }
-
-        Err(crate::error::Error::Resolution {
-            did: did_key,
-            detail,
-        })
     }
 
     fn set_cache_ttls(&self, positive_ttl: Duration, negative_ttl: Duration) {
@@ -293,6 +317,32 @@ impl DidDocumentResolver for IpfsGatewayResolver {
 }
 
 impl IpfsGatewayResolver {
+    fn resolve_lock(&self, did: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(
+            in_flight
+                .entry(did.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+        )
+    }
+
+    fn release_resolve_lock(&self, did: &str, resolve_lock: &Arc<tokio::sync::Mutex<()>>) {
+        let mut in_flight = self
+            .in_flight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if in_flight
+            .get(did)
+            .is_some_and(|current| Arc::ptr_eq(current, resolve_lock))
+            && Arc::strong_count(resolve_lock) == 2
+        {
+            in_flight.remove(did);
+        }
+    }
+
     fn read_cache(
         &self,
         did: &str,
@@ -544,6 +594,28 @@ mod tests {
             cached.is_none(),
             "miss should not be returned when miss-cache is disabled"
         );
+    }
+
+    #[test]
+    fn resolve_lock_is_shared_per_did_and_released_when_idle() {
+        use super::IpfsGatewayResolver;
+        use std::sync::Arc;
+
+        let resolver = IpfsGatewayResolver::default();
+        let first = resolver.resolve_lock("did:ma:one");
+        let second = resolver.resolve_lock("did:ma:one");
+        let other = resolver.resolve_lock("did:ma:two");
+
+        assert!(Arc::ptr_eq(&first, &second));
+        assert!(!Arc::ptr_eq(&first, &other));
+
+        drop(second);
+        resolver.release_resolve_lock("did:ma:one", &first);
+        assert!(!resolver
+            .in_flight
+            .lock()
+            .unwrap()
+            .contains_key("did:ma:one"));
     }
 
     #[test]
