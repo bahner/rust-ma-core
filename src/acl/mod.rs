@@ -51,9 +51,9 @@
 //! # use ma_core::{AclMap, CapabilityEntry, check_cap, CAP_RPC};
 //! let mut acl = AclMap::new();
 //! acl.insert("*".to_string(), CapabilityEntry::from_caps(["rpc"]));
-//! acl.insert("did:ma:Qmevil".to_string(), CapabilityEntry::Deny);
-//! assert!(check_cap(&acl, "did:ma:Qmgood", CAP_RPC).is_ok());
-//! assert!(check_cap(&acl, "did:ma:Qmevil", CAP_RPC).is_err());
+//! acl.insert("did:ma:k51evil".to_string(), CapabilityEntry::Deny);
+//! assert!(check_cap(&acl, "did:ma:k51good", CAP_RPC).is_ok());
+//! assert!(check_cap(&acl, "did:ma:k51evil", CAP_RPC).is_err());
 //! ```
 
 use std::collections::{BTreeSet, HashMap};
@@ -568,7 +568,7 @@ mod tests {
     #[test]
     fn valid_acl_keys() {
         assert!(is_valid_acl_key("*"));
-        assert!(is_valid_acl_key("did:ma:Qmfoo"));
+        assert!(is_valid_acl_key("did:ma:k51foo"));
         assert!(is_valid_acl_key("#agent"));
         assert!(is_valid_acl_key("+alice.venner"));
         assert!(is_valid_acl_key("+runtime.admins"));

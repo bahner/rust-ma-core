@@ -309,6 +309,17 @@ fn normalize_ipfs_arg(cid_or_path: &str) -> String {
     format!("/ipfs/{value}")
 }
 
+fn normalize_cid_arg(cid_or_path: &str) -> String {
+    let mut value = cid_or_path.trim().to_string();
+    while let Some(rest) = value.strip_prefix("/ipfs/") {
+        value = rest.to_string();
+    }
+    while let Some(rest) = value.strip_prefix('/') {
+        value = rest.to_string();
+    }
+    value
+}
+
 pub async fn name_publish(kubo_url: &str, key_name: &str, cid: &str) -> Result<String> {
     let options = IpnsPublishOptions::default();
     name_publish_with_options(kubo_url, key_name, cid, &options).await
@@ -648,7 +659,7 @@ pub async fn remote_pin_add_named(
 pub async fn remote_pin_rm(kubo_url: &str, service: &str, cid: &str) -> Result<()> {
     let base = kubo_url.trim_end_matches('/');
     let url = format!("{base}/api/v0/pin/remote/rm");
-    let arg = normalize_ipfs_arg(cid);
+    let arg = normalize_cid_arg(cid);
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
@@ -802,22 +813,53 @@ mod tests {
 
     #[test]
     fn normalize_ipfs_arg_from_raw_cid() {
-        assert_eq!(normalize_ipfs_arg("QmExampleCid"), "/ipfs/QmExampleCid");
+        assert_eq!(
+            normalize_ipfs_arg("bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"),
+            "/ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
+        );
     }
 
     #[test]
     fn normalize_ipfs_arg_from_prefixed_path() {
         assert_eq!(
-            normalize_ipfs_arg("/ipfs/QmExampleCid"),
-            "/ipfs/QmExampleCid"
+            normalize_ipfs_arg("/ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"),
+            "/ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
         );
     }
 
     #[test]
     fn normalize_ipfs_arg_from_double_prefixed_path() {
         assert_eq!(
-            normalize_ipfs_arg("/ipfs//ipfs/QmExampleCid"),
-            "/ipfs/QmExampleCid"
+            normalize_ipfs_arg(
+                "/ipfs//ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
+            ),
+            "/ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
+        );
+    }
+
+    #[test]
+    fn normalize_cid_arg_from_raw_cid() {
+        assert_eq!(
+            normalize_cid_arg("bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"),
+            "bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
+        );
+    }
+
+    #[test]
+    fn normalize_cid_arg_from_prefixed_path() {
+        assert_eq!(
+            normalize_cid_arg("/ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"),
+            "bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
+        );
+    }
+
+    #[test]
+    fn normalize_cid_arg_from_double_prefixed_path() {
+        assert_eq!(
+            normalize_cid_arg(
+                "/ipfs//ipfs/bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
+            ),
+            "bafkreieg3hp4tr3iv7rj24uohuqlcocojxcakzgbvqh6ul2cpbftg3wb7q"
         );
     }
 
