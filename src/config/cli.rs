@@ -110,6 +110,24 @@ pub struct MaArgs {
     #[arg(long)]
     pub kubo_key_alias: Option<String>,
 
+    /// Mirror selected CIDs to a configured Kubo remote pinning service.
+    ///
+    /// Environment variable: `MA_PIN_REMOTE`. Falls back to YAML → `false`.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub pin_remote: Option<bool>,
+
+    /// Kubo remote pinning service name, e.g. `pinata`.
+    ///
+    /// Environment variable: `MA_PIN_REMOTE_SERVICE`. Falls back to YAML.
+    #[arg(long)]
+    pub pin_remote_service: Option<String>,
+
+    /// Operator-visible remote pin name. Callers may supply a default when unset.
+    ///
+    /// Environment variable: `MA_PIN_REMOTE_NAME`. Falls back to YAML.
+    #[arg(long)]
+    pub pin_remote_name: Option<String>,
+
     /// Generate a headless config with a fresh secret bundle, write both
     /// files with 0600 permissions, and exit.
     ///

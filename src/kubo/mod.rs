@@ -20,3 +20,7 @@ pub(crate) use kubo::{
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub use kubo::{cat_bytes, ipfs_add};
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo", feature = "config"))]
+pub use pinning::remote_pin_replace;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+pub use pinning::PinReplaceOutcome;

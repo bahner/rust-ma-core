@@ -154,11 +154,28 @@ assert_eq!(key, loaded.get_key("plugin_signing").unwrap());
 | `log_level` | `"info"` | Log level for the log file. |
 | `log_level_stdout` | `"warn"` | Log level for stdout. |
 | `kubo_rpc_url` | `"http://127.0.0.1:5001"` | Kubo HTTP RPC address. |
+| `kubo_key_alias` | `slug` | Kubo IPNS key alias for daemon-owned publishing. |
 | `did_resolver_positive_ttl_secs` | 60 | Cache TTL for successful DID lookups. |
 | `did_resolver_negative_ttl_secs` | 10 | Cache TTL for failed DID lookups. |
 | `secret_bundle` | XDG-derived | Path to the `.bin` file. |
 | `log_file` | XDG-derived | Path to the log file. |
+| `pin_remote` | `false` | Mirror selected CIDs to a configured Kubo remote pinning service. |
+| `pin_remote_service` | unset | Kubo remote pinning service name, e.g. `pinata`; required when `pin_remote` is `true`. |
+| `pin_remote_name` | caller-provided | Operator-visible remote pin name. Callers supply a default when unset. |
 | `extra` | empty | Free-form YAML keys not part of the core schema. |
+
+Remote pinning uses Kubo's remote pinning service configuration. It does not
+use Kubo's local recursive `pin/update` endpoint; callers add the new remote
+pin with `pin/remote/add`, then best-effort remove the previous remote pin with
+`pin/remote/rm`. Add the remote service to Kubo first, then enable it in the
+daemon config:
+
+```yaml
+pin_remote: true
+pin_remote_service: pinata
+# optional; caller decides the default when omitted
+pin_remote_name: ma-runtime-ma-root
+```
 
 ### The slug and its env-var prefix
 

@@ -604,6 +604,72 @@ pub async fn pin_rm(kubo_url: &str, cid: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn remote_pin_add_named(
+    kubo_url: &str,
+    service: &str,
+    cid: &str,
+    name: &str,
+) -> Result<()> {
+    let base = kubo_url.trim_end_matches('/');
+    let url = format!("{base}/api/v0/pin/remote/add");
+    let arg = normalize_ipfs_arg(cid);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let resp = client
+        .post(url)
+        .query(&[
+            ("arg", arg.as_str()),
+            ("service", service),
+            ("name", name),
+            ("background", "false"),
+        ])
+        .send()
+        .await?;
+    if resp.status().is_success() {
+        return Ok(());
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if status.as_u16() == 409
+        || body.contains("DUPLICATE_OBJECT")
+        || body.contains("already pinned")
+        || body.contains("already exists")
+    {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "pin/remote/add {cid} to {service} as {name} failed: {body}"
+    ))
+}
+
+pub async fn remote_pin_rm(kubo_url: &str, service: &str, cid: &str) -> Result<()> {
+    let base = kubo_url.trim_end_matches('/');
+    let url = format!("{base}/api/v0/pin/remote/rm");
+    let arg = normalize_ipfs_arg(cid);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?;
+
+    let resp = client
+        .post(url)
+        .query(&[("service", service), ("cid", arg.as_str())])
+        .send()
+        .await?;
+    if resp.status().is_success() {
+        return Ok(());
+    }
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if status.as_u16() == 404 || body.contains("not found") || body.contains("not pinned") {
+        return Ok(());
+    }
+    Err(anyhow!("pin/remote/rm {cid} from {service} failed: {body}"))
+}
+
 // ─── Key management ─────────────────────────────────────────────────────────
 
 pub async fn generate_key(kubo_url: &str, key_name: &str) -> Result<()> {

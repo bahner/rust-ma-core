@@ -60,6 +60,14 @@ const DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS: u64 = 10;
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_KUBO_RPC_URL: &str = "http://127.0.0.1:5001";
 
+// ─── Remote pinning ─────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemotePinConfig {
+    pub service: String,
+    pub name: String,
+}
+
 // ─── Config struct ───────────────────────────────────────────────────────────
 
 /// Runtime configuration for a ma daemon.
@@ -107,6 +115,15 @@ pub struct Config {
 
     /// Path where this config was loaded from or will be saved to.
     pub config_path: Option<PathBuf>,
+
+    /// Whether to mirror selected CIDs to a configured Kubo remote pinning service.
+    pub pin_remote: bool,
+
+    /// Kubo remote pinning service name, e.g. `pinata`.
+    pub pin_remote_service: Option<String>,
+
+    /// Operator-visible remote pin name. Callers supply a default when unset.
+    pub pin_remote_name: Option<String>,
 
     /// Extra user-defined YAML keys that are not part of the core schema.
     /// Preserved during load and save so callers can extend the config freely.
@@ -293,6 +310,16 @@ fn yaml_u64(m: &serde_yaml::Mapping, key: &str) -> Option<u64> {
         })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn yaml_bool(m: &serde_yaml::Mapping, key: &str) -> Option<bool> {
+    m.get(serde_yaml::Value::String(key.to_string()))
+        .and_then(|v| match v {
+            serde_yaml::Value::Bool(b) => Some(*b),
+            serde_yaml::Value::String(s) => s.parse::<bool>().ok(),
+            _ => None,
+        })
+}
+
 // ─── Config impl ─────────────────────────────────────────────────────────────
 
 impl Config {
@@ -315,6 +342,9 @@ impl Config {
             secret_bundle: None,
             secret_bundle_passphrase: None,
             config_path: None,
+            pin_remote: false,
+            pin_remote_service: None,
+            pin_remote_name: None,
             extra: serde_yaml::Mapping::new(),
         }
     }
@@ -351,6 +381,15 @@ impl Config {
                 })
         };
 
+        let take_bool = |map: &mut serde_yaml::Mapping, key: &str| {
+            map.remove(serde_yaml::Value::String(key.to_string()))
+                .and_then(|v| match v {
+                    serde_yaml::Value::Bool(b) => Some(b),
+                    serde_yaml::Value::String(s) => s.parse::<bool>().ok(),
+                    _ => None,
+                })
+        };
+
         let slug = take_str(&mut m, "slug").unwrap_or_else(|| "ma".to_string());
         let log_level =
             take_str(&mut m, "log_level").unwrap_or_else(|| DEFAULT_LOG_LEVEL.to_string());
@@ -382,6 +421,9 @@ impl Config {
             secret_bundle: take_path(&mut m, "secret_bundle"),
             secret_bundle_passphrase: take_str(&mut m, "secret_bundle_passphrase"),
             config_path: None,
+            pin_remote: take_bool(&mut m, "pin_remote").unwrap_or(false),
+            pin_remote_service: take_str(&mut m, "pin_remote_service"),
+            pin_remote_name: take_str(&mut m, "pin_remote_name"),
             extra: m,
         })
     }
@@ -445,6 +487,16 @@ impl Config {
                 "secret_bundle_passphrase",
                 serde_yaml::Value::String(pw.clone()),
             );
+        }
+        set("pin_remote", serde_yaml::Value::Bool(self.pin_remote));
+        if let Some(ref service) = self.pin_remote_service {
+            set(
+                "pin_remote_service",
+                serde_yaml::Value::String(service.clone()),
+            );
+        }
+        if let Some(ref name) = self.pin_remote_name {
+            set("pin_remote_name", serde_yaml::Value::String(name.clone()));
         }
 
         serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
@@ -557,6 +609,19 @@ impl Config {
             .unwrap_or(default)
         };
 
+        let resolve_bool = |cli: Option<bool>, env_key: &str, default: bool| -> bool {
+            cli.or_else(|| {
+                std::env::var(format!("MA_{env_key}"))
+                    .ok()
+                    .and_then(|v| v.parse::<bool>().ok())
+            })
+            .or_else(|| {
+                yaml.as_ref()
+                    .and_then(|m| yaml_bool(m, &env_key.to_lowercase()))
+            })
+            .unwrap_or(default)
+        };
+
         let log_level = resolve_str(args.log_level.clone(), "LOG_LEVEL", DEFAULT_LOG_LEVEL);
         let log_level_stdout = resolve_str(
             args.log_level_stdout.clone(),
@@ -586,6 +651,10 @@ impl Config {
             args.secret_bundle_passphrase.clone(),
             "SECRET_BUNDLE_PASSPHRASE",
         );
+        let pin_remote = resolve_bool(args.pin_remote, "PIN_REMOTE", false);
+        let pin_remote_service =
+            resolve_opt_str(args.pin_remote_service.clone(), "PIN_REMOTE_SERVICE");
+        let pin_remote_name = resolve_opt_str(args.pin_remote_name.clone(), "PIN_REMOTE_NAME");
 
         // Extra: all YAML keys that are not part of the core schema.
         let known: &[&str] = &[
@@ -599,6 +668,9 @@ impl Config {
             "kubo_key_alias",
             "secret_bundle",
             "secret_bundle_passphrase",
+            "pin_remote",
+            "pin_remote_service",
+            "pin_remote_name",
             // Legacy key; ignored and never persisted.
             "config_path",
         ];
@@ -625,8 +697,39 @@ impl Config {
             secret_bundle,
             secret_bundle_passphrase,
             config_path: Some(config_path),
+            pin_remote,
+            pin_remote_service,
+            pin_remote_name,
             extra,
         })
+    }
+
+    /// Return validated remote pinning settings using `default_name` when the
+    /// config does not specify `pin_remote_name`.
+    pub fn remote_pin_config_with_default_name(
+        &self,
+        default_name: impl Into<String>,
+    ) -> Result<Option<RemotePinConfig>> {
+        if !self.pin_remote {
+            return Ok(None);
+        }
+        let service = self
+            .pin_remote_service
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| Error::Config("pin_remote requires pin_remote_service".to_string()))?;
+        let default_name = default_name.into();
+        let name = self
+            .pin_remote_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(default_name.as_str());
+        Ok(Some(RemotePinConfig {
+            service: service.to_string(),
+            name: name.to_string(),
+        }))
     }
 
     /// The effective log file path: `self.log_file` if set, otherwise the
@@ -747,6 +850,9 @@ impl Config {
             secret_bundle: Some(bundle_path.clone()),
             secret_bundle_passphrase: Some(passphrase),
             config_path: Some(config_path.clone()),
+            pin_remote: false,
+            pin_remote_service: None,
+            pin_remote_name: None,
             extra: serde_yaml::Mapping::new(),
         };
         config.save()?;
@@ -755,5 +861,57 @@ impl Config {
         println!("Secret bundle: {}", bundle_path.display());
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_pin_config_uses_caller_default_name() {
+        let config = Config::from_yaml_str(
+            r"
+pin_remote: true
+pin_remote_service: pinata
+",
+        )
+        .unwrap();
+
+        let remote = config
+            .remote_pin_config_with_default_name("ma-runtime-ma-root")
+            .unwrap()
+            .unwrap();
+        assert_eq!(remote.service, "pinata");
+        assert_eq!(remote.name, "ma-runtime-ma-root");
+    }
+
+    #[test]
+    fn remote_pin_config_requires_service_when_enabled() {
+        let config = Config::from_yaml_str("pin_remote: true\n").unwrap();
+
+        let err = config
+            .remote_pin_config_with_default_name("ma-runtime-ma-root")
+            .unwrap_err();
+        assert!(err.to_string().contains("pin_remote_service"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cli_pin_remote_overrides_yaml_default() {
+        let config = Config::from_args(
+            &MaArgs {
+                pin_remote: Some(true),
+                pin_remote_service: Some("pinata".to_string()),
+                pin_remote_name: Some("custom-root".to_string()),
+                ..MaArgs::default()
+            },
+            "test",
+        )
+        .unwrap();
+
+        assert!(config.pin_remote);
+        assert_eq!(config.pin_remote_service.as_deref(), Some("pinata"));
+        assert_eq!(config.pin_remote_name.as_deref(), Some("custom-root"));
     }
 }
