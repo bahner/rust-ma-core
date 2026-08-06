@@ -106,14 +106,8 @@ struct PinListResponse {
 struct PinListEntry {
     #[serde(default, rename = "Type")]
     pin_type: String,
-    #[serde(default, rename = "Metadata")]
-    metadata: BTreeMap<String, String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemotePinListResponse {
-    #[serde(default, rename = "Pins")]
-    pins: Vec<RemotePinListEntry>,
+    #[serde(default, rename = "Name")]
+    name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -303,7 +297,7 @@ pub async fn dag_put<T: Serialize>(kubo_url: &str, value: &T) -> Result<String> 
         .ok_or_else(|| anyhow!("missing CID in dag/put response: {}", body))
 }
 
-pub async fn dag_put_cbor(kubo_url: &str, data: Vec<u8>) -> Result<String> {
+pub async fn dag_put_cbor(kubo_url: &str, data: Vec<u8>, pin: bool) -> Result<String> {
     let base = kubo_url.trim_end_matches('/');
     let url = format!("{base}/api/v0/dag/put");
     let part = multipart::Part::bytes(data)
@@ -319,7 +313,7 @@ pub async fn dag_put_cbor(kubo_url: &str, data: Vec<u8>) -> Result<String> {
         .query(&[
             ("store-codec", "dag-cbor"),
             ("input-codec", "dag-cbor"),
-            ("pin", "true"),
+            ("pin", if pin { "true" } else { "false" }),
         ])
         .multipart(form)
         .send()
@@ -691,7 +685,7 @@ pub async fn list_named_recursive_pins(kubo_url: &str, name: &str) -> Result<Vec
         .timeout(Duration::from_secs(30))
         .build()?
         .post(url)
-        .query(&[("type", "recursive"), ("name", name)])
+        .query(&[("type", "recursive"), ("name", name), ("names", "true")])
         .send()
         .await?
         .error_for_status()?
@@ -700,13 +694,11 @@ pub async fn list_named_recursive_pins(kubo_url: &str, name: &str) -> Result<Vec
     let parsed: PinListResponse = serde_json::from_str(&body)
         .map_err(|error| anyhow!("failed parsing pin/ls response: {error} body={body}"))?;
 
+    // Kubo's name filter is a partial match; keep exact matches only.
     Ok(parsed
         .keys
         .into_iter()
-        .filter_map(|(cid, pin)| {
-            (pin.pin_type == "recursive" && pin.metadata.get("name") == Some(&name.to_string()))
-                .then_some(cid)
-        })
+        .filter_map(|(cid, pin)| (pin.pin_type == "recursive" && pin.name == name).then_some(cid))
         .collect())
 }
 
@@ -752,6 +744,33 @@ pub async fn remote_pin_add_named(
 }
 
 pub async fn remote_pin_rm(kubo_url: &str, service: &str, cid: &str) -> Result<()> {
+    remote_pin_rm_query(kubo_url, service, cid, &[("force", "true")]).await
+}
+
+pub async fn remote_pin_rm_named(
+    kubo_url: &str,
+    service: &str,
+    cid: &str,
+    name: &str,
+) -> Result<()> {
+    remote_pin_rm_query(kubo_url, service, cid, &[("name", name), ("force", "true")]).await
+}
+
+// Kubo defaults pin/remote/ls and pin/remote/rm to status=pinned; include the
+// transient states so stale queued/failed requests are visible and removable.
+const REMOTE_PIN_STATUSES: [(&str, &str); 4] = [
+    ("status", "queued"),
+    ("status", "pinning"),
+    ("status", "pinned"),
+    ("status", "failed"),
+];
+
+async fn remote_pin_rm_query(
+    kubo_url: &str,
+    service: &str,
+    cid: &str,
+    extra: &[(&str, &str)],
+) -> Result<()> {
     let base = kubo_url.trim_end_matches('/');
     let url = format!("{base}/api/v0/pin/remote/rm");
     let arg = normalize_cid_arg(cid);
@@ -760,11 +779,10 @@ pub async fn remote_pin_rm(kubo_url: &str, service: &str, cid: &str) -> Result<(
         .timeout(Duration::from_secs(30))
         .build()?;
 
-    let resp = client
-        .post(url)
-        .query(&[("service", service), ("cid", arg.as_str())])
-        .send()
-        .await?;
+    let mut query: Vec<(&str, &str)> = vec![("service", service), ("cid", arg.as_str())];
+    query.extend_from_slice(&REMOTE_PIN_STATUSES);
+    query.extend_from_slice(extra);
+    let resp = client.post(url).query(&query).send().await?;
     if resp.status().is_success() {
         return Ok(());
     }
@@ -783,36 +801,40 @@ pub async fn list_named_remote_pins(
 ) -> Result<Vec<String>> {
     let base = kubo_url.trim_end_matches('/');
     let url = format!("{base}/api/v0/pin/remote/ls");
+    let mut query: Vec<(&str, &str)> = vec![("service", service), ("name", name)];
+    query.extend_from_slice(&REMOTE_PIN_STATUSES);
     let body = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?
         .post(url)
-        .query(&[("service", service), ("name", name)])
+        .query(&query)
         .send()
         .await?
         .error_for_status()?
         .text()
         .await?;
-    let parsed: RemotePinListResponse = serde_json::from_str(&body)
-        .map_err(|error| anyhow!("failed parsing pin/remote/ls response: {error} body={body}"))?;
 
-    Ok(parsed
-        .pins
-        .into_iter()
-        .filter_map(|pin| {
-            let pin_name = if pin.name_upper.is_empty() {
-                pin.name_lower
-            } else {
-                pin.name_upper
-            };
-            let cid = if pin.cid_upper.is_empty() {
-                pin.cid_lower
-            } else {
-                pin.cid_upper
-            };
-            (pin_name == name && !cid.is_empty()).then_some(cid)
-        })
-        .collect())
+    // pin/remote/ls streams NDJSON: one JSON record per pin, per line.
+    let mut cids = Vec::new();
+    for line in body.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let pin: RemotePinListEntry = serde_json::from_str(line).map_err(|error| {
+            anyhow!("failed parsing pin/remote/ls response line: {error} line={line}")
+        })?;
+        let pin_name = if pin.name_upper.is_empty() {
+            pin.name_lower
+        } else {
+            pin.name_upper
+        };
+        let cid = if pin.cid_upper.is_empty() {
+            pin.cid_lower
+        } else {
+            pin.cid_upper
+        };
+        if pin_name == name && !cid.is_empty() {
+            cids.push(cid);
+        }
+    }
+    Ok(cids)
 }
 
 // ─── Key management ─────────────────────────────────────────────────────────
@@ -986,7 +1008,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dag_put_cbor_preserves_bytes_and_requests_local_pin() {
+    async fn dag_put_cbor_preserves_bytes_without_anonymous_pin() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind Kubo mock");
         let address = listener.local_addr().expect("mock address");
         let server = thread::spawn(move || {
@@ -1004,7 +1026,7 @@ mod tests {
         });
 
         let document = vec![0xd8, 0x2a, 0x43, 0x01, 0x02, 0x03];
-        let cid = dag_put_cbor(&format!("http://{address}"), document.clone())
+        let cid = dag_put_cbor(&format!("http://{address}"), document.clone(), false)
             .await
             .expect("Kubo dag put");
 
@@ -1012,7 +1034,7 @@ mod tests {
         let request = server.join().expect("Kubo mock thread");
         let request_text = String::from_utf8_lossy(&request);
         assert!(request_text.starts_with(
-            "POST /api/v0/dag/put?store-codec=dag-cbor&input-codec=dag-cbor&pin=true HTTP/1.1"
+            "POST /api/v0/dag/put?store-codec=dag-cbor&input-codec=dag-cbor&pin=false HTTP/1.1"
         ));
         assert!(request_text
             .to_ascii_lowercase()

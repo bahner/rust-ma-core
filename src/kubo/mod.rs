@@ -15,10 +15,13 @@ mod pinning;
 pub use kubo::IpnsPublishOptions;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub(crate) use kubo::{
-    dag_put_cbor, import_key, list_keys, name_publish_with_retry, name_resolve, wait_for_api,
+    dag_put_cbor, import_key, list_keys, name_publish_with_retry, pin_add_named, wait_for_api,
 };
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use kubo::{cat_bytes, ipfs_add};
+pub use kubo::{cat_bytes, ipfs_add, remote_pin_add_named};
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use pinning::{PinCleanupRequest, PinCleanupScheduler};
+pub use pinning::{
+    delete_local_pins_named_in_background, delete_remote_pins_named_in_background,
+    in_flight_pin_name, remote_pin_replace_named, PinCleanupRequest, PinCleanupScheduler,
+};

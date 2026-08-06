@@ -161,9 +161,7 @@ Only after all of these pass does the runtime call Kubo.
 Once validation passes, `IpfsDidPublisher` does the following:
 
 1. Takes ownership of the caller-provided zeroizing IPNS key buffer.
-2. Calls `/api/v0/dag/put` with the original document DAG-CBOR bytes and
-  `pin=true`. Local pinning must succeed before publication succeeds.
-3. Imports the IPNS key into Kubo's keystore under a deterministic alias
+2. Imports the IPNS key into Kubo's keystore under a deterministic alias
   derived from the document's `ma.type` plus a short blake3 hash of the IPNS
   identity. For example, an agent document uses `ma-agent-<hash>`, while a
   document without a usable `ma.type` falls back to `ma-unknown-<hash>`.
@@ -171,6 +169,9 @@ Once validation passes, `IpfsDidPublisher` does the following:
   identity always update the same keystore entry rather than accumulating new
   ones. Native runtimes may add local context such as a slug for their own
   Kubo keys; delegated agent publishes intentionally do not.
+3. Calls `/api/v0/dag/put` with the original document DAG-CBOR bytes and
+   `pin=false`, then creates and confirms a recursive local pin with the
+   managed pin name. This prevents an anonymous local pin on every publish.
 4. Calls `/api/v0/name/publish` to associate the CID with the IPNS identity,
    using bounded retries and resolve-verification after a failed request.
    The IPNS record is what makes `did:ma:<ipns-id>` resolvable.
@@ -179,7 +180,11 @@ Once validation passes, `IpfsDidPublisher` does the following:
 6. Optionally replicates the new CID to a configured remote pin service. A
   replication failure is reported as degraded status, without invalidating a
   successful local pin and IPNS publication.
-7. Returns `IpfsPublishDidResponse` with the `did` and `cid` fields populated.
+7. With overwrite enabled, queues a bounded best-effort cleanup job after the
+   new pin succeeds. It removes only pins with the exact managed name and
+   never removes the newly confirmed CID. Cleanup is detached, may be lost on
+   shutdown, and never delays publication.
+8. Returns `IpfsPublishDidResponse` with the `did` and `cid` fields populated.
 
 After step 3, the published DID is resolvable through any IPFS gateway.
 `IpfsGatewayResolver` (which compiles on wasm) can fetch and verify it:

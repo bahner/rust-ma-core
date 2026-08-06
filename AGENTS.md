@@ -36,7 +36,10 @@ src/
   interfaces.rs       — DidPublisher, IpfsPublisher traits
   ipfs/
     mod.rs            — public re-exports for ipfs sub-modules
-    gateway_resolver.rs — IpfsGatewayResolver, DidDocumentResolver trait
+    gateway.rs        — GatewayPool: HTTP transport, hedged failover, per-gateway Fibonacci cooldowns, timeouts
+    ttl_cache.rs      — TtlCache: generic positive/negative TTL cache + in-flight locks
+    gateway_resolver.rs — IpfsGatewayResolver (GatewayPool + TtlCache),
+                        DidDocumentResolver + IpnsPathResolver traits
     publish.rs        — IdentityPublishRequest, IpfsStoreRequest, IpfsDidPublisher,
                         generate_identity_publish_request, generate_ipfs_store_request,
                         validate_identity_publish_request, validate_ipfs_request
@@ -81,8 +84,11 @@ are additionally guarded by `#[cfg(not(target_arch = "wasm32"))]`.
   Call sites must pass a reference or byte literal, not `.to_vec()`.
 - Do not re-export internal kubo helpers (`dag_put`, `import_key`, …) through
   the public API. They live in `src/kubo/` which is `pub(crate)`.
-- `IpfsDidPublisher` (the public one) lives in `src/ipfs/publish.rs`, not
-  `src/kubo/publish.rs`. The kubo version is a private implementation detail.
+- `IpfsDidPublisher` lives in `src/ipfs/publish.rs` and is the only DID
+  publisher — there is no duplicate in `src/kubo/`.
+- Read side vs write side: `ipfs::GatewayPool` (and everything built on it)
+  is read-only and wasm-safe; all publishing/pinning/key operations go through
+  `crate::kubo` (native, `kubo` feature). Never mix the two directions.
 - Protocol IDs always include the leading `/`: `/ma/inbox/0.0.1`, etc.
 
 ---

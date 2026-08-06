@@ -57,7 +57,6 @@ const DEFAULT_LOG_LEVEL: &str = "info";
 const DEFAULT_LOG_LEVEL_STDOUT: &str = "info";
 const DEFAULT_DID_RESOLVER_POSITIVE_TTL_SECS: u64 = 60;
 const DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS: u64 = 10;
-const DEFAULT_OLD_PIN_BATCH_SIZE: usize = 100;
 #[cfg(not(target_arch = "wasm32"))]
 const DEFAULT_KUBO_RPC_URL: &str = "http://127.0.0.1:5001";
 
@@ -129,9 +128,6 @@ pub struct Config {
 
     /// Replace older pins with the same managed name after a new pin succeeds.
     pub pin_overwrite: bool,
-
-    /// Maximum stale pins removed by one asynchronous cleanup worker pass.
-    pub old_pin_batch_size: usize,
 
     /// Extra user-defined YAML keys that are not part of the core schema.
     /// Preserved during load and save so callers can extend the config freely.
@@ -354,7 +350,6 @@ impl Config {
             pin_remote_service: None,
             pin_remote_name: None,
             pin_overwrite: true,
-            old_pin_batch_size: DEFAULT_OLD_PIN_BATCH_SIZE,
             extra: serde_yaml::Mapping::new(),
         }
     }
@@ -411,6 +406,8 @@ impl Config {
             .unwrap_or(DEFAULT_DID_RESOLVER_NEGATIVE_TTL_SECS);
         // `config_path` is runtime state and should never be restored from YAML.
         let _ignored_config_path = take_path(&mut m, "config_path");
+        // Legacy key; consumed so it does not linger in `extra`.
+        let _ignored_old_pin_batch_size = take_u64(&mut m, "old_pin_batch_size");
         #[cfg(not(target_arch = "wasm32"))]
         let kubo_rpc_url =
             take_str(&mut m, "kubo_rpc_url").unwrap_or_else(|| DEFAULT_KUBO_RPC_URL.to_string());
@@ -435,10 +432,6 @@ impl Config {
             pin_remote_service: take_str(&mut m, "pin_remote_service"),
             pin_remote_name: take_str(&mut m, "pin_remote_name"),
             pin_overwrite: take_bool(&mut m, "pin_overwrite").unwrap_or(true),
-            old_pin_batch_size: take_u64(&mut m, "old_pin_batch_size")
-                .and_then(|size| usize::try_from(size).ok())
-                .filter(|size| *size > 0)
-                .unwrap_or(DEFAULT_OLD_PIN_BATCH_SIZE),
             extra: m,
         })
     }
@@ -514,10 +507,6 @@ impl Config {
             set("pin_remote_name", serde_yaml::Value::String(name.clone()));
         }
         set("pin_overwrite", serde_yaml::Value::Bool(self.pin_overwrite));
-        set(
-            "old_pin_batch_size",
-            serde_yaml::Value::Number(serde_yaml::Number::from(self.old_pin_batch_size)),
-        );
 
         serde_yaml::to_string(&serde_yaml::Value::Mapping(m))
             .map_err(|e| Error::Config(format!("failed to serialize config: {e}")))
@@ -676,14 +665,6 @@ impl Config {
             resolve_opt_str(args.pin_remote_service.clone(), "PIN_REMOTE_SERVICE");
         let pin_remote_name = resolve_opt_str(args.pin_remote_name.clone(), "PIN_REMOTE_NAME");
         let pin_overwrite = resolve_bool(args.pin_overwrite, "PIN_OVERWRITE", true);
-        let old_pin_batch_size = usize::try_from(resolve_u64(
-            args.old_pin_batch_size,
-            "OLD_PIN_BATCH_SIZE",
-            DEFAULT_OLD_PIN_BATCH_SIZE as u64,
-        ))
-        .ok()
-        .filter(|size| *size > 0)
-        .unwrap_or(DEFAULT_OLD_PIN_BATCH_SIZE);
 
         // Extra: all YAML keys that are not part of the core schema.
         let known: &[&str] = &[
@@ -701,6 +682,7 @@ impl Config {
             "pin_remote_service",
             "pin_remote_name",
             "pin_overwrite",
+            // Legacy key; ignored and never persisted.
             "old_pin_batch_size",
             // Legacy key; ignored and never persisted.
             "config_path",
@@ -732,7 +714,6 @@ impl Config {
             pin_remote_service,
             pin_remote_name,
             pin_overwrite,
-            old_pin_batch_size,
             extra,
         })
     }
@@ -888,7 +869,6 @@ impl Config {
             pin_remote_service: None,
             pin_remote_name: None,
             pin_overwrite: true,
-            old_pin_batch_size: DEFAULT_OLD_PIN_BATCH_SIZE,
             extra: serde_yaml::Mapping::new(),
         };
         config.save()?;

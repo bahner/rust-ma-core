@@ -15,8 +15,9 @@ use web_time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use crate::kubo::{
-    dag_put_cbor, import_key, list_keys, name_publish_with_retry, name_resolve,
-    remote_pin_replace_parts, wait_for_api, IpnsPublishOptions,
+    dag_put_cbor, import_key, in_flight_pin_name, list_keys, name_publish_with_retry,
+    pin_add_named, remote_pin_add_named, wait_for_api, IpnsPublishOptions, PinCleanupRequest,
+    PinCleanupScheduler,
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
@@ -150,6 +151,8 @@ pub struct DidDocumentPublishOptions {
     pub initial_backoff: Duration,
     /// Optional remote pin service replication policy.
     pub remote_pin: Option<RemotePinOptions>,
+    /// Replace older pins with the same name in a background best-effort job.
+    pub overwrite: bool,
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -161,6 +164,7 @@ impl Default for DidDocumentPublishOptions {
             attempts: 3,
             initial_backoff: Duration::from_secs(1),
             remote_pin: None,
+            overwrite: true,
         }
     }
 }
@@ -179,10 +183,8 @@ pub struct RemotePinOptions {
 #[derive(Clone, Debug, Eq, PartialEq)]
 /// Remote replication outcome after local pinning and IPNS publication.
 pub enum RemotePinStatus {
-    /// The new CID was replicated; old-pin removal may still need attention.
-    Replicated {
-        previous_remove_error: Option<String>,
-    },
+    /// The new CID was replicated and stale-pin cleanup was scheduled.
+    Replicated { cleanup_scheduled: bool },
     /// Local publication succeeded, but replication failed after retries.
     Degraded { error: String },
 }
@@ -199,6 +201,8 @@ pub struct PublishedDidDocument {
     pub ipns_id: String,
     /// Kubo accepted the required local recursive pin.
     pub local_pinned: bool,
+    /// Whether a detached stale-pin cleanup job was scheduled.
+    pub cleanup_scheduled: bool,
     /// Optional remote replication state.
     pub remote_pin: Option<RemotePinStatus>,
 }
@@ -290,7 +294,14 @@ impl IpfsDidPublisher {
         ipns_private_key: Zeroizing<Vec<u8>>,
         options: DidDocumentPublishOptions,
     ) -> Result<PublishedDidDocument> {
-        publish_did_document_to_kubo(&self.kubo_url, did_document, ipns_private_key, options).await
+        publish_did_document_to_kubo(
+            &self.kubo_url,
+            PinCleanupScheduler::global(),
+            did_document,
+            ipns_private_key,
+            options,
+        )
+        .await
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
@@ -437,6 +448,7 @@ pub fn validate_ipfs_request(message: &Message) -> Result<ValidatedIpfsStore> {
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 async fn publish_did_document_to_kubo(
     kubo_url: &str,
+    cleanup: &PinCleanupScheduler,
     did_document: Vec<u8>,
     ipns_private_key: Zeroizing<Vec<u8>>,
     options: DidDocumentPublishOptions,
@@ -453,11 +465,6 @@ async fn publish_did_document_to_kubo(
         options.key_parts.iter().map(String::as_str).collect()
     };
     let key_name = ipns_key_name_for_parts(&key_parts, &document_ipns_id);
-    let previous_cid = name_resolve(kubo_url, &format!("/ipns/{document_ipns_id}"), true)
-        .await
-        .ok()
-        .and_then(|path| path.trim().strip_prefix("/ipfs/").map(str::to_string));
-
     let existing_key = list_keys(kubo_url)
         .await?
         .into_iter()
@@ -498,7 +505,21 @@ async fn publish_did_document_to_kubo(
         }
     }
 
-    let published_cid = dag_put_cbor(kubo_url, did_document).await?;
+    let pin_name = options
+        .remote_pin
+        .as_ref()
+        .map(|remote| remote.name.clone())
+        .unwrap_or_else(|| key_name.clone());
+    // With overwrite, pin under an in-flight name so the fresh pin is safe
+    // while the cleanup worker removes stale pins; the worker renames it to
+    // the requested name once everything is clean.
+    let add_name = if options.overwrite {
+        in_flight_pin_name(&pin_name)
+    } else {
+        pin_name.clone()
+    };
+    let published_cid = dag_put_cbor(kubo_url, did_document, false).await?;
+    pin_add_named(kubo_url, &published_cid, &add_name).await?;
     name_publish_with_retry(
         kubo_url,
         &key_name,
@@ -510,58 +531,96 @@ async fn publish_did_document_to_kubo(
     )
     .await?;
 
-    let remote_pin = match options.remote_pin {
-        Some(remote) => Some(
-            match remote_pin_with_retry(
-                kubo_url,
-                &remote,
-                previous_cid.as_deref(),
-                &published_cid,
-                options.attempts,
-                options.initial_backoff,
-            )
-            .await
-            {
-                Ok(outcome) => RemotePinStatus::Replicated {
-                    previous_remove_error: outcome.previous_remove_error,
-                },
-                Err(error) => RemotePinStatus::Degraded {
-                    error: error.to_string(),
-                },
-            },
-        ),
-        None => None,
-    };
+    let (cleanup_scheduled, remote_pin) =
+        confirm_pins_and_schedule_cleanup(kubo_url, cleanup, pin_name, &published_cid, options)
+            .await;
 
     Ok(PublishedDidDocument {
         cid: published_cid,
         key_name,
         ipns_id: document_ipns_id,
         local_pinned: true,
+        cleanup_scheduled,
         remote_pin,
     })
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+async fn confirm_pins_and_schedule_cleanup(
+    kubo_url: &str,
+    cleanup: &PinCleanupScheduler,
+    pin_name: String,
+    published_cid: &str,
+    options: DidDocumentPublishOptions,
+) -> (bool, Option<RemotePinStatus>) {
+    let (remote_pin, remote_service) = match options.remote_pin {
+        Some(remote) => match remote_pin_with_retry(
+            kubo_url,
+            &remote,
+            published_cid,
+            options.overwrite,
+            options.attempts,
+            options.initial_backoff,
+        )
+        .await
+        {
+            Ok(()) => (
+                Some(RemotePinStatus::Replicated {
+                    cleanup_scheduled: false,
+                }),
+                Some(remote.service),
+            ),
+            Err(error) => (
+                Some(RemotePinStatus::Degraded {
+                    error: error.to_string(),
+                }),
+                None,
+            ),
+        },
+        None => (None, None),
+    };
+    let cleanup_scheduled = options.overwrite
+        && cleanup.schedule(PinCleanupRequest {
+            kubo_url: kubo_url.to_string(),
+            name: pin_name,
+            protected_cid: published_cid.to_string(),
+            cleanup_local: true,
+            remote_service,
+        });
+    let remote_pin = remote_pin.map(|status| match status {
+        RemotePinStatus::Replicated { .. } => RemotePinStatus::Replicated { cleanup_scheduled },
+        RemotePinStatus::Degraded { error } => RemotePinStatus::Degraded { error },
+    });
+
+    (cleanup_scheduled, remote_pin)
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 async fn remote_pin_with_retry(
     kubo_url: &str,
     remote: &RemotePinOptions,
-    previous_cid: Option<&str>,
     cid: &str,
+    overwrite: bool,
     attempts: u32,
     initial_backoff: Duration,
-) -> Result<crate::kubo::PinReplaceOutcome> {
+) -> Result<()> {
     if attempts == 0 {
         return Err(anyhow!("remote pin attempts must be >= 1"));
     }
+    // Mirror the local policy: with overwrite the fresh remote pin gets the
+    // in-flight name and is renamed by the cleanup worker after the old pins
+    // are gone.
+    let add_name = if overwrite {
+        in_flight_pin_name(&remote.name)
+    } else {
+        remote.name.clone()
+    };
     let mut delay = initial_backoff;
     let mut previous_delay = Duration::ZERO;
     let mut last_error = None;
     for attempt in 1..=attempts {
-        match remote_pin_replace_parts(kubo_url, &remote.service, &remote.name, previous_cid, cid)
-            .await
-        {
-            Ok(outcome) => return Ok(outcome),
+        match remote_pin_add_named(kubo_url, &remote.service, cid, &add_name).await {
+            Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }
         if attempt < attempts {
@@ -583,6 +642,7 @@ pub async fn handle_ipfs_publish(
 
     let published = publish_did_document_to_kubo(
         kubo_url,
+        PinCleanupScheduler::global(),
         validated.document_bytes,
         Zeroizing::new(validated.ipns_secret_key),
         DidDocumentPublishOptions::default(),

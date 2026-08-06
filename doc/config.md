@@ -162,19 +162,25 @@ assert_eq!(key, loaded.get_key("plugin_signing").unwrap());
 | `pin_remote` | `false` | Mirror selected CIDs to a configured Kubo remote pinning service. |
 | `pin_remote_service` | unset | Kubo remote pinning service name, e.g. `pinata`; required when `pin_remote` is `true`. |
 | `pin_remote_name` | caller-provided | Operator-visible remote pin name. Callers supply a default when unset. |
+| `pin_overwrite` | `true` | Queue best-effort cleanup of older pins with the same exact managed name after a new pin succeeds. |
 | `extra` | empty | Free-form YAML keys not part of the core schema. |
 
-Remote pinning uses Kubo's remote pinning service configuration. It does not
-use Kubo's local recursive `pin/update` endpoint; callers add the new remote
-pin with `pin/remote/add`, then best-effort remove the previous remote pin with
-`pin/remote/rm`. Add the remote service to Kubo first, then enable it in the
-daemon config:
+Remote pinning uses Kubo's remote pinning service configuration. With
+`pin_overwrite: true`, the fresh pin is created under a temporary in-flight
+name (`<name>~new`) so the data is protected immediately, and a detached
+best-effort cleanup job removes every stale pin with the managed name. Only
+once all stale pins are gone is the pin renamed to the requested name. An
+interrupted run leaves the in-flight pin intact — the data stays safe and the
+unfinished state is visible, so the next publish completes the replacement.
+Unpinning never directly deletes the pinned content. Add the remote service to
+Kubo first, then enable it in the daemon config:
 
 ```yaml
 pin_remote: true
 pin_remote_service: pinata
 # optional; caller decides the default when omitted
 pin_remote_name: ma-runtime-ma-root
+pin_overwrite: true
 ```
 
 ### The slug and its env-var prefix

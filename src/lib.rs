@@ -84,12 +84,11 @@ mod iroh;
 pub mod key;
 #[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
 mod kubo;
-#[cfg(all(feature = "kubo", feature = "config", not(target_arch = "wasm32")))]
-pub use kubo::remote_pin_replace;
 #[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
-pub use kubo::PinReplaceOutcome;
-#[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
-pub use kubo::{cat_bytes, ipfs_add};
+pub use kubo::{
+    cat_bytes, delete_local_pins_named_in_background, delete_remote_pins_named_in_background,
+    in_flight_pin_name, ipfs_add, remote_pin_add_named, remote_pin_replace_named,
+};
 pub mod msg;
 mod multiformat;
 #[cfg(feature = "iroh")]
@@ -182,7 +181,8 @@ pub use config::{BrowserIdentityExport, Config, SecretBundle};
 
 // ─── Re-export DID resolution ───────────────────────────────────────────────
 
-pub use ipfs::gateway_resolver::{DidDocumentResolver, IpfsGatewayResolver};
+pub use ipfs::gateway::GatewayPool;
+pub use ipfs::gateway_resolver::{DidDocumentResolver, IpfsGatewayResolver, IpnsPathResolver};
 
 // ─── Re-export existing modules ─────────────────────────────────────────────
 
