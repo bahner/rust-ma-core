@@ -3,6 +3,8 @@
 //! HTTP helpers for the Kubo `/api/v0/` endpoints: data add/cat, DAG
 //! put/get, IPNS name publish/resolve, key management, and pinning.
 
+use std::collections::BTreeMap;
+
 use crate::{Did, Document};
 use anyhow::{anyhow, Result};
 use reqwest::multipart;
@@ -92,6 +94,38 @@ struct KeyImportResponse {
 pub struct KuboKey {
     pub name: String,
     pub id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct PinListResponse {
+    #[serde(default, rename = "Keys")]
+    keys: BTreeMap<String, PinListEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PinListEntry {
+    #[serde(default, rename = "Type")]
+    pin_type: String,
+    #[serde(default, rename = "Metadata")]
+    metadata: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemotePinListResponse {
+    #[serde(default, rename = "Pins")]
+    pins: Vec<RemotePinListEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RemotePinListEntry {
+    #[serde(default, rename = "Cid")]
+    cid_upper: String,
+    #[serde(default, rename = "cid")]
+    cid_lower: String,
+    #[serde(default, rename = "Name")]
+    name_upper: String,
+    #[serde(default, rename = "name")]
+    name_lower: String,
 }
 
 // ─── Publish options ────────────────────────────────────────────────────────
@@ -269,6 +303,40 @@ pub async fn dag_put<T: Serialize>(kubo_url: &str, value: &T) -> Result<String> 
         .ok_or_else(|| anyhow!("missing CID in dag/put response: {}", body))
 }
 
+pub async fn dag_put_cbor(kubo_url: &str, data: Vec<u8>) -> Result<String> {
+    let base = kubo_url.trim_end_matches('/');
+    let url = format!("{base}/api/v0/dag/put");
+    let part = multipart::Part::bytes(data)
+        .file_name("document.cbor")
+        .mime_str("application/octet-stream")?;
+    let form = multipart::Form::new().part("file", part);
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()?;
+    let body = client
+        .post(url)
+        .query(&[
+            ("store-codec", "dag-cbor"),
+            ("input-codec", "dag-cbor"),
+            ("pin", "true"),
+        ])
+        .multipart(form)
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    let parsed: DagPutResponse = serde_json::from_str(&body)
+        .map_err(|e| anyhow!("failed parsing dag/put response: {} body={}", e, body))?;
+    parsed
+        .cid_upper
+        .or(parsed.cid)
+        .map(|c| c.slash)
+        .ok_or_else(|| anyhow!("missing CID in dag/put response: {}", body))
+}
+
 pub async fn dag_get<T: DeserializeOwned>(kubo_url: &str, cid: &str) -> Result<T> {
     let base = kubo_url.trim_end_matches('/');
     let url = format!("{base}/api/v0/dag/get");
@@ -384,6 +452,7 @@ pub async fn name_publish_with_options(
 pub async fn name_publish_with_retry(
     kubo_url: &str,
     key_name: &str,
+    ipns_id: &str,
     cid: &str,
     options: &IpnsPublishOptions,
     attempts: u32,
@@ -401,7 +470,7 @@ pub async fn name_publish_with_retry(
         match name_publish_with_options(kubo_url, key_name, cid, options).await {
             Ok(value) => return Ok(value),
             Err(err) => {
-                if let Ok(value) = verify_name_target_after_error(kubo_url, key_name, cid).await {
+                if let Ok(value) = verify_name_target_after_error(kubo_url, ipns_id, cid).await {
                     warn!(
                         "name publish attempt {}/{} reported error for key '{}' but resolve confirms target; accepting: {}",
                         attempt, attempts, key_name, value
@@ -434,17 +503,17 @@ pub async fn name_publish_with_retry(
 
 async fn verify_name_target_after_error(
     kubo_url: &str,
-    key_name: &str,
+    ipns_id: &str,
     cid: &str,
 ) -> Result<String> {
     let expected = normalize_ipfs_arg(cid);
-    let resolved = name_resolve(kubo_url, &format!("/ipns/{key_name}"), true).await?;
+    let resolved = name_resolve(kubo_url, &format!("/ipns/{ipns_id}"), true).await?;
     if resolved.trim() == expected {
         return Ok(resolved);
     }
     Err(anyhow!(
-        "post-error resolve mismatch for key '{}': expected '{}' got '{}'",
-        key_name,
+        "post-error resolve mismatch for IPNS id '{}': expected '{}' got '{}'",
+        ipns_id,
         expected,
         resolved
     ))
@@ -615,6 +684,32 @@ pub async fn pin_rm(kubo_url: &str, cid: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn list_named_recursive_pins(kubo_url: &str, name: &str) -> Result<Vec<String>> {
+    let base = kubo_url.trim_end_matches('/');
+    let url = format!("{base}/api/v0/pin/ls");
+    let body = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?
+        .post(url)
+        .query(&[("type", "recursive"), ("name", name)])
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let parsed: PinListResponse = serde_json::from_str(&body)
+        .map_err(|error| anyhow!("failed parsing pin/ls response: {error} body={body}"))?;
+
+    Ok(parsed
+        .keys
+        .into_iter()
+        .filter_map(|(cid, pin)| {
+            (pin.pin_type == "recursive" && pin.metadata.get("name") == Some(&name.to_string()))
+                .then_some(cid)
+        })
+        .collect())
+}
+
 pub async fn remote_pin_add_named(
     kubo_url: &str,
     service: &str,
@@ -679,6 +774,45 @@ pub async fn remote_pin_rm(kubo_url: &str, service: &str, cid: &str) -> Result<(
         return Ok(());
     }
     Err(anyhow!("pin/remote/rm {cid} from {service} failed: {body}"))
+}
+
+pub async fn list_named_remote_pins(
+    kubo_url: &str,
+    service: &str,
+    name: &str,
+) -> Result<Vec<String>> {
+    let base = kubo_url.trim_end_matches('/');
+    let url = format!("{base}/api/v0/pin/remote/ls");
+    let body = reqwest::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()?
+        .post(url)
+        .query(&[("service", service), ("name", name)])
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let parsed: RemotePinListResponse = serde_json::from_str(&body)
+        .map_err(|error| anyhow!("failed parsing pin/remote/ls response: {error} body={body}"))?;
+
+    Ok(parsed
+        .pins
+        .into_iter()
+        .filter_map(|pin| {
+            let pin_name = if pin.name_upper.is_empty() {
+                pin.name_lower
+            } else {
+                pin.name_upper
+            };
+            let cid = if pin.cid_upper.is_empty() {
+                pin.cid_lower
+            } else {
+                pin.cid_upper
+            };
+            (pin_name == name && !cid.is_empty()).then_some(cid)
+        })
+        .collect())
 }
 
 // ─── Key management ─────────────────────────────────────────────────────────
@@ -809,7 +943,82 @@ pub async fn remove_key(kubo_url: &str, key_name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
     use super::*;
+
+    fn read_http_request(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        let mut expected_length = None;
+
+        loop {
+            let count = stream.read(&mut buffer).expect("read request");
+            assert_ne!(count, 0, "request ended before its body arrived");
+            request.extend_from_slice(&buffer[..count]);
+
+            if expected_length.is_none() {
+                if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let headers = String::from_utf8_lossy(&request[..header_end]);
+                    expected_length = headers.lines().find_map(|line| {
+                        line.split_once(':').and_then(|(name, value)| {
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().expect("content length"))
+                        })
+                    });
+                    assert!(expected_length.is_some(), "request must have a body");
+                }
+            }
+
+            if let Some(length) = expected_length {
+                let header_end = request
+                    .windows(4)
+                    .position(|part| part == b"\r\n\r\n")
+                    .expect("headers parsed")
+                    + 4;
+                if request.len() >= header_end + length {
+                    return request;
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn dag_put_cbor_preserves_bytes_and_requests_local_pin() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind Kubo mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept Kubo request");
+            let request = read_http_request(&mut stream);
+            let body = r#"{"Cid":{"/":"bafy-local-pin"}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write Kubo response");
+            request
+        });
+
+        let document = vec![0xd8, 0x2a, 0x43, 0x01, 0x02, 0x03];
+        let cid = dag_put_cbor(&format!("http://{address}"), document.clone())
+            .await
+            .expect("Kubo dag put");
+
+        assert_eq!(cid, "bafy-local-pin");
+        let request = server.join().expect("Kubo mock thread");
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(request_text.starts_with(
+            "POST /api/v0/dag/put?store-codec=dag-cbor&input-codec=dag-cbor&pin=true HTTP/1.1"
+        ));
+        assert!(request_text
+            .to_ascii_lowercase()
+            .contains("content-type: multipart/form-data;"));
+        assert!(request.windows(document.len()).any(|part| part == document));
+    }
 
     #[test]
     fn normalize_ipfs_arg_from_raw_cid() {

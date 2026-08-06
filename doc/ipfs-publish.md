@@ -160,9 +160,10 @@ Only after all of these pass does the runtime call Kubo.
 
 Once validation passes, `IpfsDidPublisher` does the following:
 
-1. Calls `/api/v0/dag/put` with the document's DAG-CBOR bytes. Kubo stores
-   the document and returns a CID.
-2. Imports the IPNS key into Kubo's keystore under a deterministic alias
+1. Takes ownership of the caller-provided zeroizing IPNS key buffer.
+2. Calls `/api/v0/dag/put` with the original document DAG-CBOR bytes and
+  `pin=true`. Local pinning must succeed before publication succeeds.
+3. Imports the IPNS key into Kubo's keystore under a deterministic alias
   derived from the document's `ma.type` plus a short blake3 hash of the IPNS
   identity. For example, an agent document uses `ma-agent-<hash>`, while a
   document without a usable `ma.type` falls back to `ma-unknown-<hash>`.
@@ -170,12 +171,15 @@ Once validation passes, `IpfsDidPublisher` does the following:
   identity always update the same keystore entry rather than accumulating new
   ones. Native runtimes may add local context such as a slug for their own
   Kubo keys; delegated agent publishes intentionally do not.
-3. Calls `/api/v0/name/publish` to associate the CID with the IPNS identity.
+4. Calls `/api/v0/name/publish` to associate the CID with the IPNS identity,
+   using bounded retries and resolve-verification after a failed request.
    The IPNS record is what makes `did:ma:<ipns-id>` resolvable.
-4. Calls `zeroize` on the raw key bytes in memory once the publish call
-   returns.
-5. Returns `IpfsPublishDidResponse` with the `did` and `cid` fields
-   populated.
+5. Drops the owned key buffer, zeroizing it on success, failure or task
+  cancellation.
+6. Optionally replicates the new CID to a configured remote pin service. A
+  replication failure is reported as degraded status, without invalidating a
+  successful local pin and IPNS publication.
+7. Returns `IpfsPublishDidResponse` with the `did` and `cid` fields populated.
 
 After step 3, the published DID is resolvable through any IPFS gateway.
 `IpfsGatewayResolver` (which compiles on wasm) can fetch and verify it:

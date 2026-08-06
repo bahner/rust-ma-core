@@ -180,6 +180,80 @@ impl IpfsGatewayResolver {
         }
     }
 
+    /// Resolve an `/ipns/<name>` reference to its current `/ipfs/<cid>` path.
+    ///
+    /// The resolver reads only gateway response metadata, never the referenced
+    /// content body. Gateways commonly expose the resolved content path in
+    /// `X-Ipfs-Path`; redirects to `/ipfs/...` are accepted as a fallback.
+    pub async fn resolve_ipns_path(&self, path: &str) -> crate::error::Result<String> {
+        if !path.starts_with("/ipns/") || path.len() <= "/ipns/".len() {
+            return Err(crate::error::Error::IpnsResolution {
+                path: path.to_string(),
+                detail: "expected a non-empty /ipns/<name> path".to_string(),
+            });
+        }
+
+        let now = Instant::now();
+        let mut errors = Vec::new();
+        for gateway in &self.gateways {
+            if is_localhost_gateway(gateway) && self.localhost_is_blocked(now) {
+                errors.push(format!("{gateway} -> skipped (cooldown)"));
+                continue;
+            }
+
+            let url = format!("{}{}", gateway, path.trim_start_matches('/'));
+            let request = self.client.head(&url);
+            #[cfg(target_arch = "wasm32")]
+            let request = {
+                let timeout = self
+                    .wasm_request_timeout
+                    .lock()
+                    .ok()
+                    .and_then(|guard| *guard)
+                    .unwrap_or_else(|| Duration::from_secs(10));
+                request.timeout(timeout)
+            };
+
+            let response = match request.send().await {
+                Ok(response) if response.status().is_success() => response,
+                Ok(response) => {
+                    if is_localhost_gateway(gateway) {
+                        self.block_localhost_until(Some(now + self.localhost_cooldown));
+                    }
+                    errors.push(format!("{url} -> HTTP {}", response.status()));
+                    continue;
+                }
+                Err(error) => {
+                    if is_localhost_gateway(gateway) {
+                        self.block_localhost_until(Some(now + self.localhost_cooldown));
+                    }
+                    errors.push(format!("{url} -> {error}"));
+                    continue;
+                }
+            };
+
+            let header_path = response
+                .headers()
+                .get("x-ipfs-path")
+                .and_then(|value| value.to_str().ok());
+            if let Some(resolved) = resolved_ipfs_path(header_path, response.url().path()) {
+                if is_localhost_gateway(gateway) {
+                    self.block_localhost_until(None);
+                }
+                return Ok(resolved);
+            }
+
+            errors.push(format!(
+                "{url} -> gateway did not expose a resolved /ipfs path"
+            ));
+        }
+
+        Err(crate::error::Error::IpnsResolution {
+            path: path.to_string(),
+            detail: errors.join(" | "),
+        })
+    }
+
     async fn fetch_document(
         &self,
         parsed: &crate::Did,
@@ -413,6 +487,16 @@ fn is_localhost_gateway(gateway: &str) -> bool {
     gateway.starts_with("http://127.0.0.1:") || gateway.starts_with("http://localhost:")
 }
 
+fn resolved_ipfs_path(header_path: Option<&str>, final_path: &str) -> Option<String> {
+    header_path
+        .into_iter()
+        .chain(std::iter::once(final_path))
+        .find_map(|path| {
+            path.strip_prefix("/ipfs/")
+                .map(|cid| format!("/ipfs/{cid}"))
+        })
+}
+
 fn parse_document_bytes(bytes: &[u8]) -> std::result::Result<Document, String> {
     // Try DAG-CBOR first (canonical wire format; what dweb.link and Kubo return
     // when the client sends Accept: application/vnd.ipld.dag-cbor).
@@ -427,7 +511,7 @@ fn parse_document_bytes(bytes: &[u8]) -> std::result::Result<Document, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_document_bytes;
+    use super::{parse_document_bytes, resolved_ipfs_path};
     use crate::generate_identity_from_secret;
 
     #[test]
@@ -450,6 +534,19 @@ mod tests {
         let json = serde_json::to_vec(&identity.document).expect("json serialize");
         let parsed = parse_document_bytes(&json).expect("JSON fallback should succeed");
         assert_eq!(parsed, identity.document);
+    }
+
+    #[test]
+    fn resolved_ipfs_path_prefers_gateway_header() {
+        assert_eq!(
+            resolved_ipfs_path(Some("/ipfs/bafyheader"), "/ipfs/bafyredirect"),
+            Some("/ipfs/bafyheader".to_string())
+        );
+        assert_eq!(
+            resolved_ipfs_path(None, "/ipfs/bafyredirect"),
+            Some("/ipfs/bafyredirect".to_string())
+        );
+        assert_eq!(resolved_ipfs_path(None, "/ipns/k51name"), None);
     }
 
     #[test]

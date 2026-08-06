@@ -21,4 +21,9 @@ pub use publish::{
 
 // Native + kubo-specific publishing backend
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub use publish::{handle_ipfs_publish, IpfsDidPublisher};
+pub use crate::kubo::IpnsPublishOptions;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+pub use publish::{
+    handle_ipfs_publish, DidDocumentPublishOptions, IpfsDidPublisher, PublishedDidDocument,
+    RemotePinOptions, RemotePinStatus,
+};

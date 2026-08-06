@@ -15,10 +15,13 @@ use web_time::Duration;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use crate::kubo::{
-    dag_put, import_key, list_keys, name_publish_with_retry, wait_for_api, IpnsPublishOptions,
+    dag_put_cbor, import_key, list_keys, name_publish_with_retry, name_resolve,
+    remote_pin_replace_parts, wait_for_api, IpnsPublishOptions,
 };
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 use reqwest::Url;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+use zeroize::Zeroizing;
 
 use crate::service::{MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST, MESSAGE_TYPE_IPFS_REQUEST};
 
@@ -133,6 +136,73 @@ pub struct IpfsPublishDidResponse {
     pub cid: Option<String>,
 }
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+#[derive(Clone, Debug)]
+/// Publication policy for a native DID document.
+pub struct DidDocumentPublishOptions {
+    /// Deterministic Kubo key-name components; defaults to the document kind.
+    pub key_parts: Vec<String>,
+    /// IPNS publication settings.
+    pub ipns: IpnsPublishOptions,
+    /// Number of bounded retries for IPNS and remote pinning.
+    pub attempts: u32,
+    /// Initial Fibonacci retry delay.
+    pub initial_backoff: Duration,
+    /// Optional remote pin service replication policy.
+    pub remote_pin: Option<RemotePinOptions>,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+impl Default for DidDocumentPublishOptions {
+    fn default() -> Self {
+        Self {
+            key_parts: Vec::new(),
+            ipns: IpnsPublishOptions::default(),
+            attempts: 3,
+            initial_backoff: Duration::from_secs(1),
+            remote_pin: None,
+        }
+    }
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Remote Kubo pin service configuration for a published DID document.
+pub struct RemotePinOptions {
+    /// Kubo pin-service name.
+    pub service: String,
+    /// Human-readable label for the remote pin.
+    pub name: String,
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Remote replication outcome after local pinning and IPNS publication.
+pub enum RemotePinStatus {
+    /// The new CID was replicated; old-pin removal may still need attention.
+    Replicated {
+        previous_remove_error: Option<String>,
+    },
+    /// Local publication succeeded, but replication failed after retries.
+    Degraded { error: String },
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Confirmed outcome of a locally pinned DID document publication.
+pub struct PublishedDidDocument {
+    /// CID stored and published through IPNS.
+    pub cid: String,
+    /// Deterministic Kubo IPNS key alias.
+    pub key_name: String,
+    /// IPNS identity rooted by the DID.
+    pub ipns_id: String,
+    /// Kubo accepted the required local recursive pin.
+    pub local_pinned: bool,
+    /// Optional remote replication state.
+    pub remote_pin: Option<RemotePinStatus>,
+}
+
 pub struct ValidatedIdentityPublish {
     pub document_bytes: Vec<u8>,
     pub ipns_secret_key: Vec<u8>,
@@ -216,10 +286,11 @@ impl IpfsDidPublisher {
 
     pub async fn publish_document(
         &self,
-        did_document: &[u8],
-        ipns_private_key: &[u8],
-    ) -> Result<Option<String>> {
-        publish_did_document_to_kubo(&self.kubo_url, did_document, ipns_private_key).await
+        did_document: Vec<u8>,
+        ipns_private_key: Zeroizing<Vec<u8>>,
+        options: DidDocumentPublishOptions,
+    ) -> Result<PublishedDidDocument> {
+        publish_did_document_to_kubo(&self.kubo_url, did_document, ipns_private_key, options).await
     }
 
     pub async fn wait_until_ready(&self, attempts: u32) -> Result<()> {
@@ -364,20 +435,28 @@ pub fn validate_ipfs_request(message: &Message) -> Result<ValidatedIpfsStore> {
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
-pub async fn publish_did_document_to_kubo(
+async fn publish_did_document_to_kubo(
     kubo_url: &str,
-    did_document: &[u8],
-    ipns_private_key: &[u8],
-) -> Result<Option<String>> {
-    let document = Document::decode(did_document)
+    did_document: Vec<u8>,
+    ipns_private_key: Zeroizing<Vec<u8>>,
+    options: DidDocumentPublishOptions,
+) -> Result<PublishedDidDocument> {
+    let document = Document::decode(&did_document)
         .map_err(|e| anyhow!("invalid DID document dag-cbor: {}", e))?;
     let document_did = Did::try_from(document.id.as_str())
         .map_err(|e| anyhow!("invalid document DID '{}': {}", document.id, e))?;
     let document_ipns_id = document_did.ipns.clone();
 
-    // Deterministic key name derived from the DID IPNS identity.
-    // Same DID always maps to the same Kubo key name — idempotent, no cleanup needed.
-    let key_name = ipns_key_name_for_document(&document);
+    let key_parts: Vec<&str> = if options.key_parts.is_empty() {
+        vec![document_ma_type(&document)]
+    } else {
+        options.key_parts.iter().map(String::as_str).collect()
+    };
+    let key_name = ipns_key_name_for_parts(&key_parts, &document_ipns_id);
+    let previous_cid = name_resolve(kubo_url, &format!("/ipns/{document_ipns_id}"), true)
+        .await
+        .ok()
+        .and_then(|path| path.trim().strip_prefix("/ipfs/").map(str::to_string));
 
     let existing_key = list_keys(kubo_url)
         .await?
@@ -401,6 +480,7 @@ pub async fn publish_did_document_to_kubo(
         }
 
         let raw_key: [u8; 32] = ipns_private_key
+            .as_slice()
             .try_into()
             .map_err(|_| anyhow!("ipns_private_key must be 32 bytes"))?;
         let keypair = libp2p_identity::Keypair::ed25519_from_bytes(raw_key)
@@ -418,19 +498,80 @@ pub async fn publish_did_document_to_kubo(
         }
     }
 
-    let published_cid = dag_put(kubo_url, &document).await?;
-    let ipns_options = IpnsPublishOptions::default();
+    let published_cid = dag_put_cbor(kubo_url, did_document).await?;
     name_publish_with_retry(
         kubo_url,
         &key_name,
+        &document_ipns_id,
         &published_cid,
-        &ipns_options,
-        3,
-        Duration::from_secs(1),
+        &options.ipns,
+        options.attempts,
+        options.initial_backoff,
     )
     .await?;
 
-    Ok(Some(published_cid))
+    let remote_pin = match options.remote_pin {
+        Some(remote) => Some(
+            match remote_pin_with_retry(
+                kubo_url,
+                &remote,
+                previous_cid.as_deref(),
+                &published_cid,
+                options.attempts,
+                options.initial_backoff,
+            )
+            .await
+            {
+                Ok(outcome) => RemotePinStatus::Replicated {
+                    previous_remove_error: outcome.previous_remove_error,
+                },
+                Err(error) => RemotePinStatus::Degraded {
+                    error: error.to_string(),
+                },
+            },
+        ),
+        None => None,
+    };
+
+    Ok(PublishedDidDocument {
+        cid: published_cid,
+        key_name,
+        ipns_id: document_ipns_id,
+        local_pinned: true,
+        remote_pin,
+    })
+}
+
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+async fn remote_pin_with_retry(
+    kubo_url: &str,
+    remote: &RemotePinOptions,
+    previous_cid: Option<&str>,
+    cid: &str,
+    attempts: u32,
+    initial_backoff: Duration,
+) -> Result<crate::kubo::PinReplaceOutcome> {
+    if attempts == 0 {
+        return Err(anyhow!("remote pin attempts must be >= 1"));
+    }
+    let mut delay = initial_backoff;
+    let mut previous_delay = Duration::ZERO;
+    let mut last_error = None;
+    for attempt in 1..=attempts {
+        match remote_pin_replace_parts(kubo_url, &remote.service, &remote.name, previous_cid, cid)
+            .await
+        {
+            Ok(outcome) => return Ok(outcome),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt < attempts {
+            tokio::time::sleep(delay).await;
+            let next = previous_delay.saturating_add(delay);
+            previous_delay = delay;
+            delay = std::cmp::min(next, Duration::from_secs(30));
+        }
+    }
+    Err(last_error.expect("at least one remote pin attempt"))
 }
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
@@ -440,10 +581,11 @@ pub async fn handle_ipfs_publish(
 ) -> Result<IpfsPublishDidResponse> {
     let validated = validate_identity_publish_request(message_cbor)?;
 
-    let cid = publish_did_document_to_kubo(
+    let published = publish_did_document_to_kubo(
         kubo_url,
-        &validated.document_bytes,
-        &validated.ipns_secret_key,
+        validated.document_bytes,
+        Zeroizing::new(validated.ipns_secret_key),
+        DidDocumentPublishOptions::default(),
     )
     .await?;
 
@@ -451,7 +593,7 @@ pub async fn handle_ipfs_publish(
         ok: true,
         message: "did document published via ma/ipfs/0.0.1".to_string(),
         did: Some(validated.document_did.id()),
-        cid,
+        cid: Some(published.cid),
     })
 }
 

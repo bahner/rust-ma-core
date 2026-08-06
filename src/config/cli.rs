@@ -128,6 +128,18 @@ pub struct MaArgs {
     #[arg(long)]
     pub pin_remote_name: Option<String>,
 
+    /// Replace older pins with the same managed name after a new pin succeeds.
+    ///
+    /// Environment variable: `MA_PIN_OVERWRITE`. Falls back to YAML → `true`.
+    #[arg(long, num_args = 0..=1, default_missing_value = "true")]
+    pub pin_overwrite: Option<bool>,
+
+    /// Maximum stale pins removed by one asynchronous cleanup worker pass.
+    ///
+    /// Environment variable: `MA_OLD_PIN_BATCH_SIZE`. Falls back to YAML → `100`.
+    #[arg(long)]
+    pub old_pin_batch_size: Option<u64>,
+
     /// Generate a headless config with a fresh secret bundle, write both
     /// files with 0600 permissions, and exit.
     ///

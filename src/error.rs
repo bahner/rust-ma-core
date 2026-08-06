@@ -135,6 +135,9 @@ pub enum Error {
     #[error("DID resolution failed for {did}: {detail}")]
     Resolution { did: String, detail: String },
 
+    #[error("IPNS resolution failed for {path}: {detail}")]
+    IpnsResolution { path: String, detail: String },
+
     #[error("no inbox transport in DID document for {0}")]
     NoInboxTransport(String),
 
