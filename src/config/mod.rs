@@ -954,9 +954,8 @@ pin_remote_service: pinata
     #[test]
     fn explicit_config_uses_yaml_slug_without_relocating_config_path() {
         let path = std::env::temp_dir().join(format!(
-            "ma-core-config-slug-{}-{}.yaml",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            "ma-core-config-explicit-slug-{}.yaml",
+            std::process::id()
         ));
         std::fs::write(&path, "slug: testing\n").unwrap();
 
@@ -978,9 +977,8 @@ pin_remote_service: pinata
     #[test]
     fn cli_slug_overrides_yaml_slug() {
         let path = std::env::temp_dir().join(format!(
-            "ma-core-config-slug-cli-{}-{}.yaml",
-            std::process::id(),
-            std::thread::current().name().unwrap_or("test")
+            "ma-core-config-cli-slug-{}.yaml",
+            std::process::id()
         ));
         std::fs::write(&path, "slug: yaml-name\n").unwrap();
 
