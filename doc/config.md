@@ -190,10 +190,23 @@ with slug `ma` looks for its config at `~/.config/ma/ma.yaml` and its bundle
 at `~/.config/ma/ma.bin`. It also sets the env-var prefix: slug `ma` means the
 daemon reads `MA_MA_LOG_LEVEL`, `MA_MA_KUBO_RPC_URL`, and so on.
 
-The slug **must never appear in the YAML config file**. The daemon needs the
-slug to find the file, and would need the file to learn the slug — an
-unresolvable catch-22. Set it via `--slug` on the command line or via the
-`MA_SLUG` environment variable only.
+The config-file path is selected before YAML is loaded: `--config` wins, then
+`--slug` / `MA_SLUG`, then the compile-time default slug. A `slug:` inside the
+selected YAML file cannot redirect that read, but it does set the effective
+runtime slug for bundle, log, and other slug-derived defaults. CLI/environment
+slug still overrides YAML.
+
+For example, this retains the explicit config location while using `testing`
+for runtime defaults:
+
+```console
+myapp --config /tmp/testing.yaml
+```
+
+```yaml
+# /tmp/testing.yaml
+slug: testing
+```
 
 ### Setting up Config::from_args
 
@@ -256,6 +269,7 @@ OS-level permissions and the host is trusted.
 Config is read from `$XDG_CONFIG_HOME/ma/<slug>.yaml`. A typical file:
 
 ```yaml
+slug: ma
 log_level: debug
 log_level_stdout: info
 kubo_rpc_url: http://127.0.0.1:5001

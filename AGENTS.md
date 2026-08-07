@@ -144,3 +144,7 @@ so `did:ma:foo#bar` and `did:ma:foo` match the same entry.
 - Doctests in `src/msg.rs` use `b"..."` byte literals (not `.to_vec()`).
 - `Config::from_args` requires a `const MA_DEFAULT_SLUG: &str` in the caller's
   crate at compile time.
+- A YAML `slug:` is valid and sets the effective runtime slug after the chosen
+  config file is loaded. It must not select, redirect, or reload the config
+  path; that path is selected first by `--config`, then CLI/environment slug,
+  then the compile-time default. CLI/environment slug overrides YAML.

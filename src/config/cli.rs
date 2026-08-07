@@ -42,8 +42,9 @@ pub struct MaArgs {
     #[arg(long, env = "MA_CONFIG")]
     pub config: Option<PathBuf>,
 
-    /// Runtime slug. Overrides `MA_DEFAULT_SLUG` for file naming
-    /// (`<slug>.yaml`, `<slug>.bin`, `<slug>.log`) only.
+    /// Runtime slug. Overrides YAML and `MA_DEFAULT_SLUG` for file naming
+    /// (`<slug>.yaml`, `<slug>.bin`, `<slug>.log`). YAML `slug` cannot choose
+    /// which configuration file is read.
     ///
     /// Environment variable: `MA_SLUG`
     #[arg(long, env = "MA_SLUG")]

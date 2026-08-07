@@ -179,10 +179,10 @@ impl GatewayPool {
     /// GET `path` from the gateway pool until `parse` accepts a body.
     ///
     /// Gateways are tried in cooldown-filtered order, hedged: a pending
-    /// attempt that has not answered within [`HEDGE_DELAY`] gets the next
+    /// attempt that has not answered within `HEDGE_DELAY` gets the next
     /// gateway raced against it and the first parsed success wins. Failing
     /// gateways earn an escalating Fibonacci cooldown; the whole operation
-    /// is bounded by [`TOTAL_DEADLINE`]. On total failure the per-gateway
+    /// is bounded by `TOTAL_DEADLINE`. On total failure the per-gateway
     /// errors are joined into one string for the caller to wrap.
     pub async fn fetch<T>(
         &self,

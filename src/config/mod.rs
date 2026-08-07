@@ -14,6 +14,10 @@
 //! 3. YAML config file (`XDG_CONFIG_HOME/ma/<slug>.yaml`)
 //! 4. Built-in defaults
 //!
+//! The config path is selected from explicit `--config`, then CLI/environment
+//! slug, then the default slug before YAML is loaded. A YAML `slug` sets the
+//! effective runtime slug only after that selected file has been read.
+//!
 //! # Native compile-time constant requirement
 //!
 //! Binaries using [`Config::from_args`] **must** declare a compile-time
@@ -78,7 +82,8 @@ pub struct RemotePinConfig {
 #[derive(Debug, Clone)]
 pub struct Config {
     /// Short printable slug identifying this daemon instance.
-    /// Used in default file names: `<slug>.yaml`, `<slug>.bin`, `<slug>.log`.
+    /// Used in default bundle and log file names, and in the default config
+    /// filename when selected through CLI/environment before YAML is read.
     pub slug: String,
 
     /// Log level written to the log file (e.g. `"info"`, `"debug"`).
@@ -543,7 +548,7 @@ impl Config {
     ///
     /// # Priority
     ///
-    /// For each field the resolution order is:
+    /// For each field other than config-file selection, the resolution order is:
     /// 1. Explicit CLI argument
     /// 2. `MA_FIELD` environment variable
     /// 3. Value from the YAML config file
