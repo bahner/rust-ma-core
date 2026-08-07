@@ -444,9 +444,7 @@ impl Config {
             m.insert(serde_yaml::Value::String(k.to_string()), v);
         };
 
-        // NOTE: `slug` is intentionally omitted — it selects which config file
-        // to open, so storing it inside that file is a catch-22.
-        // It is read only from CLI (--slug) or env (MA_SLUG), never from YAML.
+        set("slug", serde_yaml::Value::String(self.slug.clone()));
         set(
             "log_level",
             serde_yaml::Value::String(self.log_level.clone()),
@@ -552,8 +550,9 @@ impl Config {
     /// 4. Built-in default
     #[allow(clippy::too_many_lines)]
     pub fn from_args(args: &MaArgs, default_slug: &'static str) -> Result<Self> {
-        // Slug: CLI/env via clap (MA_SLUG) → compile-time default.
-        let slug = args
+        // Select the config path before loading YAML. A slug within the loaded
+        // file may set the effective runtime slug, but cannot redirect this read.
+        let config_slug = args
             .slug
             .clone()
             .unwrap_or_else(|| default_slug.to_string());
@@ -562,7 +561,7 @@ impl Config {
         let config_path = if let Some(ref p) = args.config {
             p.clone()
         } else {
-            default_config_path(&slug)?
+            default_config_path(&config_slug)?
         };
 
         // Load YAML if the file exists.
@@ -572,6 +571,12 @@ impl Config {
         } else {
             None
         };
+
+        let slug = args
+            .slug
+            .clone()
+            .or_else(|| yaml.as_ref().and_then(|m| yaml_str(m, "slug")))
+            .unwrap_or_else(|| default_slug.to_string());
 
         // Helper: resolve a string field through the priority chain.
         // NOTE: closures borrow `yaml` and `prefix` immutably; NLL ensures
@@ -913,6 +918,14 @@ pin_remote_service: pinata
         assert!(err.to_string().contains("pin_remote_service"));
     }
 
+    #[test]
+    fn yaml_round_trip_preserves_slug() {
+        let config = Config::from_yaml_str("slug: testing\n").unwrap();
+
+        assert_eq!(config.slug, "testing");
+        assert!(config.to_yaml_string().unwrap().contains("slug: testing"));
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn cli_pin_remote_overrides_yaml_default() {
@@ -930,5 +943,54 @@ pin_remote_service: pinata
         assert!(config.pin_remote);
         assert_eq!(config.pin_remote_service.as_deref(), Some("pinata"));
         assert_eq!(config.pin_remote_name.as_deref(), Some("custom-root"));
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn explicit_config_uses_yaml_slug_without_relocating_config_path() {
+        let path = std::env::temp_dir().join(format!(
+            "ma-core-config-slug-{}-{}.yaml",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, "slug: testing\n").unwrap();
+
+        let config = Config::from_args(
+            &MaArgs {
+                config: Some(path.clone()),
+                ..MaArgs::default()
+            },
+            "ma",
+        )
+        .unwrap();
+
+        assert_eq!(config.slug, "testing");
+        assert_eq!(config.config_path.as_deref(), Some(path.as_path()));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn cli_slug_overrides_yaml_slug() {
+        let path = std::env::temp_dir().join(format!(
+            "ma-core-config-slug-cli-{}-{}.yaml",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, "slug: yaml-name\n").unwrap();
+
+        let config = Config::from_args(
+            &MaArgs {
+                config: Some(path.clone()),
+                slug: Some("cli-name".to_string()),
+                ..MaArgs::default()
+            },
+            "ma",
+        )
+        .unwrap();
+
+        assert_eq!(config.slug, "cli-name");
+        assert_eq!(config.config_path.as_deref(), Some(path.as_path()));
+        let _ = std::fs::remove_file(path);
     }
 }
