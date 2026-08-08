@@ -851,6 +851,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn validate_identity_publish_request_rejects_malformed_document_shapes() {
+        let identity = test_identity(27);
+        let signing_key = test_signing_key(&identity);
+
+        let mut wrong_context = identity.document.clone();
+        wrong_context.context = vec!["https://www.w3.org/ns/did/v1".to_string()];
+
+        let mut fragmented_id = identity.document.clone();
+        fragmented_id.id.push_str("#subject");
+
+        let mut fragmented_controller = identity.document.clone();
+        fragmented_controller.controller[0].push_str("#controller");
+
+        let mut wrong_method_type = identity.document.clone();
+        wrong_method_type.verification_method[0].key_type = "JsonWebKey2020".to_string();
+
+        let mut missing_relationship_target = identity.document.clone();
+        missing_relationship_target.assertion_method[0] =
+            format!("{}#unknown", missing_relationship_target.id);
+
+        let mut wrong_assertion_codec = identity.document.clone();
+        wrong_assertion_codec.assertion_method[0] = wrong_assertion_codec.key_agreement[0].clone();
+
+        let mut wrong_agreement_codec = identity.document.clone();
+        wrong_agreement_codec.key_agreement[0] = wrong_agreement_codec.assertion_method[0].clone();
+
+        for (name, document) in [
+            ("wrong context", wrong_context),
+            ("fragmented document id", fragmented_id),
+            ("fragmented controller", fragmented_controller),
+            ("wrong verification method type", wrong_method_type),
+            ("missing relationship target", missing_relationship_target),
+            ("wrong assertion codec", wrong_assertion_codec),
+            ("wrong key-agreement codec", wrong_agreement_codec),
+        ] {
+            let payload = generate_identity_publish_request(&document, b"private-key")
+                .expect("publish payload");
+            let message = Message::new(
+                identity.document.id.clone(),
+                String::new(),
+                MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
+                "application/cbor",
+                &payload,
+                &signing_key,
+            )
+            .expect("message");
+
+            let err = validate_identity_publish_request(&message.encode().expect("message cbor"))
+                .err()
+                .unwrap_or_else(|| panic!("accepted malformed document: {name}"));
+            assert!(
+                err.to_string().contains("invalid DID document"),
+                "unexpected error for {name}: {err}"
+            );
+        }
+    }
+
     #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn normalizes_trailing_slash() {

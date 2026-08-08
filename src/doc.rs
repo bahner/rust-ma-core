@@ -72,15 +72,21 @@ impl VerificationMethod {
     pub fn validate(&self) -> Result<()> {
         Did::validate_url(&self.id)?;
 
-        if self.key_type.is_empty() {
-            return Err(MaError::VerificationMethodMissingType);
+        match self.key_type.as_str() {
+            "" => return Err(MaError::VerificationMethodMissingType),
+            "Multikey" => {}
+            _ => {
+                return Err(MaError::InvalidVerificationMethodType(
+                    self.key_type.clone(),
+                ));
+            }
         }
 
         if self.controller.is_empty() {
             return Err(MaError::EmptyController);
         }
 
-        Did::validate(&self.controller)?;
+        validate_bare_did(&self.controller)?;
 
         if self.public_key_multibase.is_empty() {
             return Err(MaError::EmptyPublicKeyMultibase);
@@ -496,18 +502,22 @@ impl Document {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.context.is_empty() {
-            return Err(MaError::EmptyContext);
+        if self.context != DEFAULT_DID_CONTEXT {
+            return Err(if self.context.is_empty() {
+                MaError::EmptyContext
+            } else {
+                MaError::InvalidContext
+            });
         }
 
-        Did::validate(&self.id)?;
+        validate_bare_did(&self.id)?;
 
         if self.controller.is_empty() {
             return Err(MaError::EmptyController);
         }
 
         for controller in &self.controller {
-            Did::validate(controller)?;
+            validate_bare_did(controller)?;
         }
 
         if !is_valid_rfc3339_utc(&self.created_at) {
@@ -534,8 +544,34 @@ impl Document {
             ));
         }
 
+        self.validate_relationships(&self.assertion_method, CODEC_ED25519_PUB)?;
+        self.validate_relationships(&self.key_agreement, CODEC_X25519_PUB)?;
+
         Ok(())
     }
+
+    fn validate_relationships(&self, relationships: &[String], expected_codec: u64) -> Result<()> {
+        for method_id in relationships {
+            Did::validate_url(method_id)?;
+            let method = self.get_verification_method_by_id(method_id)?;
+            let (codec, _) = public_key_multibase_decode(&method.public_key_multibase)?;
+            if codec != expected_codec {
+                return Err(MaError::InvalidMulticodec {
+                    expected: expected_codec,
+                    actual: codec,
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_bare_did(value: &str) -> Result<()> {
+    let did = Did::try_from(value)?;
+    if did.fragment.is_some() {
+        return Err(MaError::UnexpectedFragment);
+    }
+    Ok(())
 }
 
 impl TryFrom<&[u8]> for Document {
@@ -688,6 +724,104 @@ mod tests {
         document
             .validate()
             .expect("validate should accept any ma value");
+    }
+
+    #[test]
+    fn canonical_document_passes_structural_validation() {
+        let identity = crate::generate_identity_from_secret([21u8; 32]).expect("identity");
+        identity.document.validate().expect("canonical document");
+    }
+
+    #[test]
+    fn document_validation_requires_exact_context() {
+        let identity = crate::generate_identity_from_secret([22u8; 32]).expect("identity");
+
+        for context in [
+            vec!["https://www.w3.org/ns/did/v1".to_string()],
+            vec![
+                "https://www.w3.org/ns/did/v1.1".to_string(),
+                "https://example.test/context".to_string(),
+            ],
+        ] {
+            let mut document = identity.document.clone();
+            document.context = context;
+            assert!(matches!(document.validate(), Err(MaError::InvalidContext)));
+        }
+    }
+
+    #[test]
+    fn document_validation_requires_bare_document_and_controller_dids() {
+        let identity = crate::generate_identity_from_secret([23u8; 32]).expect("identity");
+
+        let mut document = identity.document.clone();
+        document.id.push_str("#subject");
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::UnexpectedFragment)
+        ));
+
+        let mut document = identity.document;
+        document.controller[0].push_str("#controller");
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::UnexpectedFragment)
+        ));
+    }
+
+    #[test]
+    fn verification_method_validation_requires_multikey_and_bare_controller() {
+        let identity = crate::generate_identity_from_secret([24u8; 32]).expect("identity");
+
+        let mut method = identity.document.verification_method[0].clone();
+        method.key_type = "JsonWebKey2020".to_string();
+        assert!(matches!(
+            method.validate(),
+            Err(MaError::InvalidVerificationMethodType(_))
+        ));
+
+        let mut method = identity.document.verification_method[0].clone();
+        method.controller.push_str("#controller");
+        assert!(matches!(
+            method.validate(),
+            Err(MaError::UnexpectedFragment)
+        ));
+    }
+
+    #[test]
+    fn document_validation_requires_relationship_targets_to_exist() {
+        let identity = crate::generate_identity_from_secret([25u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.assertion_method[0] = format!("{}#unknown", document.id);
+
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::UnknownVerificationMethod(_))
+        ));
+    }
+
+    #[test]
+    fn document_validation_requires_relationship_codecs() {
+        let identity = crate::generate_identity_from_secret([26u8; 32]).expect("identity");
+
+        let mut document = identity.document.clone();
+        document.assertion_method[0] = document.key_agreement[0].clone();
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::InvalidMulticodec {
+                expected: CODEC_ED25519_PUB,
+                actual: CODEC_X25519_PUB,
+            })
+        ));
+
+        let mut document = identity.document;
+        document.key_agreement[0] = document.assertion_method[0].clone();
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::InvalidMulticodec {
+                expected: CODEC_X25519_PUB,
+                actual: CODEC_ED25519_PUB,
+            })
+        ));
     }
 
     #[test]

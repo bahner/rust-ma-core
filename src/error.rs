@@ -58,10 +58,14 @@ pub enum MaError {
     MessageRequiresRecipient,
     #[error("context missing")]
     EmptyContext,
+    #[error("invalid DID document context")]
+    InvalidContext,
     #[error("controller missing")]
     EmptyController,
     #[error("verification method missing type")]
     VerificationMethodMissingType,
+    #[error("invalid verification method type: {0}")]
+    InvalidVerificationMethodType(String),
     #[error("unknown verification method: {0}")]
     UnknownVerificationMethod(String),
     #[error("public key multibase is empty")]
