@@ -54,6 +54,10 @@ pub enum MaError {
     ReplayDetected,
     #[error("broadcast messages must not have a recipient")]
     BroadcastMustNotHaveRecipient,
+    #[error("broadcast messages must not be encrypted")]
+    BroadcastMustNotBeEncrypted,
+    #[error("message type requires an encrypted envelope")]
+    EncryptionRequired,
     #[error("encrypted messages require a recipient")]
     MessageRequiresRecipient,
     #[error("context missing")]

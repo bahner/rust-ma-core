@@ -18,10 +18,11 @@ use tracing::warn;
 use crate::endpoint::{MaEndpoint, DEFAULT_INBOX_CAPACITY};
 use crate::error::{Error, Result};
 use crate::inbox::Inbox;
+use crate::ipfs::DidDocumentResolver;
 use crate::iroh::channel::Channel;
 use crate::outbox::{Outbox, OutboxWire};
 use crate::transport::transport_string;
-use crate::{Document, Message};
+use crate::{Did, Document, EncryptionKey, Envelope, MaError, Message, ReplayGuard};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 use tokio::sync::Mutex as AsyncMutex;
@@ -33,9 +34,66 @@ const DEFAULT_INBOUND_READ_TIMEOUT: std::time::Duration = std::time::Duration::f
 
 type ConnectLocks = Mutex<HashMap<(String, String), Arc<AsyncMutex<()>>>>;
 
+#[derive(Clone)]
+struct InboundSecurity {
+    recipient_key: EncryptionKey,
+    resolver: Arc<dyn DidDocumentResolver>,
+    replay_guard: Arc<Mutex<ReplayGuard>>,
+}
+
+impl std::fmt::Debug for InboundSecurity {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("InboundSecurity")
+            .finish_non_exhaustive()
+    }
+}
+
+impl InboundSecurity {
+    fn new(recipient_key: EncryptionKey, resolver: Arc<dyn DidDocumentResolver>) -> Self {
+        Self {
+            recipient_key,
+            resolver,
+            replay_guard: Arc::new(Mutex::new(ReplayGuard::default())),
+        }
+    }
+
+    async fn decode(&self, payload: &[u8]) -> Result<Message> {
+        let (message, encrypted) = match Envelope::decode(payload) {
+            Ok(envelope) => (envelope.decrypt(&self.recipient_key)?, true),
+            Err(_) => (Message::decode(payload)?, false),
+        };
+
+        if encrypted && message.message_type == crate::service::MESSAGE_TYPE_BROADCAST {
+            return Err(Error::Validation(MaError::BroadcastMustNotBeEncrypted));
+        }
+        if !encrypted && message.message_type != crate::service::MESSAGE_TYPE_BROADCAST {
+            return Err(Error::Validation(MaError::EncryptionRequired));
+        }
+        if encrypted && !same_base_did(&message.to, &self.recipient_key.did.id())? {
+            return Err(Error::Validation(MaError::InvalidRecipient));
+        }
+
+        let sender_document = self.resolver.resolve(&message.from).await?;
+        message.verify_with_document(&sender_document)?;
+        self.replay_guard
+            .lock()
+            .expect("replay guard lock poisoned")
+            .check_and_insert(&message.headers())?;
+        Ok(message)
+    }
+}
+
+fn same_base_did(left: &str, right: &str) -> Result<bool> {
+    let (left_base, _) = Did::parse(left)?;
+    let (right_base, _) = Did::parse(right)?;
+    Ok(left_base == right_base)
+}
+
 /// An iroh-backed ma endpoint.
 pub struct IrohEndpoint {
     endpoint: Endpoint,
+    inbound_security: InboundSecurity,
     protocols: Vec<String>,
     inboxes: BTreeMap<String, Inbox<Message>>,
     router: Option<Router>,
@@ -62,7 +120,12 @@ impl IrohEndpoint {
     /// When `ipv6` is `false` the endpoint binds an IPv4-only socket
     /// (`0.0.0.0:0`). This suppresses the `NetworkUnreachable` warnings that
     /// appear on hosts without a working IPv6 stack.
-    pub async fn new(secret_bytes: [u8; 32], ipv6: bool) -> Result<Self> {
+    pub async fn new(
+        secret_bytes: [u8; 32],
+        recipient_key: EncryptionKey,
+        resolver: Arc<dyn DidDocumentResolver>,
+        ipv6: bool,
+    ) -> Result<Self> {
         let secret = SecretKey::from_bytes(&secret_bytes);
         let endpoint = if ipv6 {
             Endpoint::builder(presets::N0)
@@ -97,6 +160,7 @@ impl IrohEndpoint {
 
         Ok(Self {
             endpoint,
+            inbound_security: InboundSecurity::new(recipient_key, resolver),
             protocols: Vec::new(),
             inboxes: BTreeMap::new(),
             router: None,
@@ -212,6 +276,7 @@ impl IrohEndpoint {
             return;
         };
         let inbox = inbox.clone();
+        let inbound_security = self.inbound_security.clone();
         let conn = connection.clone();
         tokio::spawn(async move {
             loop {
@@ -228,6 +293,7 @@ impl IrohEndpoint {
                     }
                 };
                 let inbox = inbox.clone();
+                let inbound_security = inbound_security.clone();
                 let proto = normalized.clone();
                 let remote = conn.remote_id();
                 tokio::spawn(async move {
@@ -261,7 +327,7 @@ impl IrohEndpoint {
 
                     let _ = send.finish();
 
-                    let message = match Message::decode(&payload) {
+                    let message = match inbound_security.decode(&payload).await {
                         Ok(message) => message,
                         Err(err) => {
                             warn!(
@@ -273,16 +339,6 @@ impl IrohEndpoint {
                             return;
                         }
                     };
-
-                    if let Err(err) = message.headers().validate() {
-                        warn!(
-                            protocol = %proto,
-                            remote = %remote,
-                            error = %err,
-                            "invalid inbound message headers on outbound connection"
-                        );
-                        return;
-                    }
 
                     inbox.push(now_secs(), message.exp, message);
                 });
@@ -430,6 +486,7 @@ impl IrohEndpoint {
                     protocol.clone(),
                     inbox.clone(),
                     Arc::clone(&self.connection_cache),
+                    self.inbound_security.clone(),
                 );
                 builder = builder.accept(protocol.as_bytes(), handler);
             }
@@ -558,6 +615,7 @@ impl IrohEndpoint {
             let normalized = normalize_protocol(protocol);
             if let Some(inbox) = self.inboxes.get(&normalized) {
                 let inbox_clone = inbox.clone();
+                let inbound_security = self.inbound_security.clone();
                 let conn_clone = connection.clone();
                 let proto_label = normalized.clone();
                 wasm_bindgen_futures::spawn_local(async move {
@@ -565,6 +623,7 @@ impl IrohEndpoint {
                         match conn_clone.accept_bi().await {
                             Ok((mut send, mut recv)) => {
                                 let inbox = inbox_clone.clone();
+                                let inbound_security = inbound_security.clone();
                                 let label = proto_label.clone();
                                 wasm_bindgen_futures::spawn_local(async move {
                                     web_sys::console::info_1(
@@ -587,7 +646,7 @@ impl IrohEndpoint {
                                         }
                                     };
                                     let _ = send.finish();
-                                    let message = match Message::decode(&payload) {
+                                    let message = match inbound_security.decode(&payload).await {
                                         Ok(m) => m,
                                         Err(e) => {
                                             web_sys::console::warn_1(
@@ -597,13 +656,6 @@ impl IrohEndpoint {
                                             return;
                                         }
                                     };
-                                    if let Err(e) = message.headers().validate() {
-                                        web_sys::console::warn_1(
-                                            &format!("[iroh] outbound reply headers invalid: {e}")
-                                                .into(),
-                                        );
-                                        return;
-                                    }
                                     web_sys::console::info_1(
                                         &format!("[iroh] outbound reply push: protocol={label} msg_id={}", message.id).into(),
                                     );
@@ -814,6 +866,7 @@ struct InboxProtocolHandler {
     /// Shared with `IrohEndpoint` — inbound connections are inserted here so
     /// the outbound send path can reuse them for replies to NAT-ed peers.
     connection_cache: Arc<Mutex<HashMap<(String, String), Connection>>>,
+    inbound_security: InboundSecurity,
 }
 
 impl InboxProtocolHandler {
@@ -821,12 +874,14 @@ impl InboxProtocolHandler {
         protocol: String,
         inbox: Inbox<Message>,
         connection_cache: Arc<Mutex<HashMap<(String, String), Connection>>>,
+        inbound_security: InboundSecurity,
     ) -> Self {
         Self {
             protocol,
             inbox,
             max_message_size: DEFAULT_MAX_INBOUND_MESSAGE_SIZE,
             connection_cache,
+            inbound_security,
         }
     }
 }
@@ -903,7 +958,7 @@ impl ProtocolHandler for InboxProtocolHandler {
 
                 let _ = send.finish();
 
-                let message = match Message::decode(&payload) {
+                let message = match handler.inbound_security.decode(&payload).await {
                     Ok(message) => message,
                     Err(err) => {
                         warn!(
@@ -915,16 +970,6 @@ impl ProtocolHandler for InboxProtocolHandler {
                         return;
                     }
                 };
-
-                if let Err(err) = message.headers().validate() {
-                    warn!(
-                        protocol = %handler.protocol,
-                        remote = %remote_id,
-                        error = %err,
-                        "invalid inbound message headers"
-                    );
-                    return;
-                }
 
                 handler.inbox.push(now_secs(), message.exp, message);
             });
@@ -951,7 +996,7 @@ impl ProtocolHandler for InboxProtocolHandler {
 
                 let _ = send.finish();
 
-                let message = match Message::decode(&payload) {
+                let message = match handler.inbound_security.decode(&payload).await {
                     Ok(message) => message,
                     Err(err) => {
                         web_sys::console::warn_1(
@@ -960,17 +1005,6 @@ impl ProtocolHandler for InboxProtocolHandler {
                         return;
                     }
                 };
-
-                if let Err(err) = message.headers().validate() {
-                    web_sys::console::warn_1(
-                        &format!(
-                            "[iroh] invalid inbound message headers: protocol={} remote={} err={}",
-                            handler.protocol, remote_id, err
-                        )
-                        .into(),
-                    );
-                    return;
-                }
 
                 web_sys::console::debug_1(
                     &format!(
@@ -1031,7 +1065,216 @@ fn message_created_at_secs(created_at: f64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Did, Document};
+    use super::{InboundSecurity, IrohEndpoint};
+    use crate::{
+        generate_identity_from_secret, Did, DidDocumentResolver, Document, EncryptionKey, MaError,
+        Message, SigningKey,
+    };
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    struct RejectResolver;
+
+    struct FixedResolver(Document);
+
+    #[async_trait]
+    impl DidDocumentResolver for RejectResolver {
+        async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
+            Err(crate::Error::Resolution {
+                did: did.to_string(),
+                detail: "unexpected test resolution".to_string(),
+            })
+        }
+    }
+
+    #[async_trait]
+    impl DidDocumentResolver for FixedResolver {
+        async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
+            let (identifier, _) = Did::parse(did)?;
+            if format!("{}{}", crate::DID_PREFIX, identifier) == self.0.id {
+                Ok(self.0.clone())
+            } else {
+                Err(crate::Error::Resolution {
+                    did: did.to_string(),
+                    detail: "unknown test DID".to_string(),
+                })
+            }
+        }
+    }
+
+    fn identity(secret: [u8; 32]) -> (Document, SigningKey, EncryptionKey) {
+        let identity = generate_identity_from_secret(secret).expect("identity");
+        let signing_did =
+            Did::new_url(&identity.subject_url.ipns, Some("sign")).expect("signing DID");
+        let encryption_did =
+            Did::new_url(&identity.subject_url.ipns, Some("enc")).expect("encryption DID");
+        let signing_bytes = hex::decode(identity.signing_private_key_hex)
+            .expect("signing key hex")
+            .try_into()
+            .expect("signing key length");
+        let encryption_bytes = hex::decode(identity.encryption_private_key_hex)
+            .expect("encryption key hex")
+            .try_into()
+            .expect("encryption key length");
+        let signing_key =
+            SigningKey::from_private_key_bytes(signing_did, signing_bytes).expect("signing key");
+        let encryption_key =
+            EncryptionKey::from_private_key_bytes(encryption_did, encryption_bytes)
+                .expect("encryption key");
+        (identity.document, signing_key, encryption_key)
+    }
+
+    fn inbound_fixture() -> (InboundSecurity, Document, SigningKey, Document) {
+        let (sender_document, sender_signing, _) = identity([1; 32]);
+        let (recipient_document, _, recipient_encryption) = identity([2; 32]);
+        let resolver = Arc::new(FixedResolver(sender_document.clone()));
+        (
+            InboundSecurity::new(recipient_encryption, resolver),
+            sender_document,
+            sender_signing,
+            recipient_document,
+        )
+    }
+
+    fn point_to_point_message(
+        sender: &Document,
+        signing_key: &SigningKey,
+        recipient: &Document,
+    ) -> Message {
+        Message::new(
+            sender.id.clone(),
+            recipient.id.clone(),
+            crate::service::MESSAGE_TYPE_MESSAGE,
+            "text/plain",
+            b"secret",
+            signing_key,
+        )
+        .expect("message")
+    }
+
+    #[tokio::test]
+    async fn inbound_envelope_is_decrypted_and_verified() {
+        let (security, sender, signing_key, recipient) = inbound_fixture();
+        let message = point_to_point_message(&sender, &signing_key, &recipient);
+        let payload = message
+            .enclose_for(&recipient)
+            .expect("envelope")
+            .encode()
+            .expect("envelope CBOR");
+
+        let opened = security
+            .decode(&payload)
+            .await
+            .expect("authenticated message");
+
+        assert_eq!(opened, message);
+    }
+
+    #[tokio::test]
+    async fn inbound_raw_point_to_point_message_is_rejected() {
+        let (security, sender, signing_key, recipient) = inbound_fixture();
+        let message = point_to_point_message(&sender, &signing_key, &recipient);
+        let payload = message.encode().expect("message CBOR");
+
+        let error = security
+            .decode(&payload)
+            .await
+            .expect_err("raw message rejected");
+
+        assert!(matches!(
+            error,
+            crate::Error::Validation(MaError::EncryptionRequired)
+        ));
+    }
+
+    #[tokio::test]
+    async fn inbound_raw_broadcast_is_verified() {
+        let (security, sender, signing_key, _) = inbound_fixture();
+        let broadcast = Message::new(
+            sender.id.clone(),
+            String::new(),
+            crate::service::MESSAGE_TYPE_BROADCAST,
+            "text/plain",
+            b"public",
+            &signing_key,
+        )
+        .expect("broadcast");
+        let payload = broadcast.encode().expect("broadcast CBOR");
+
+        let opened = security.decode(&payload).await.expect("verified broadcast");
+
+        assert_eq!(opened, broadcast);
+    }
+
+    #[tokio::test]
+    async fn inbound_encrypted_broadcast_is_rejected() {
+        let (security, sender, signing_key, recipient) = inbound_fixture();
+        let broadcast = Message::new(
+            sender.id.clone(),
+            String::new(),
+            crate::service::MESSAGE_TYPE_BROADCAST,
+            "text/plain",
+            b"public",
+            &signing_key,
+        )
+        .expect("broadcast");
+        let payload = broadcast
+            .enclose_for(&recipient)
+            .expect("envelope")
+            .encode()
+            .expect("envelope CBOR");
+
+        let error = security
+            .decode(&payload)
+            .await
+            .expect_err("encrypted broadcast rejected");
+
+        assert!(matches!(
+            error,
+            crate::Error::Validation(MaError::BroadcastMustNotBeEncrypted)
+        ));
+    }
+
+    #[tokio::test]
+    async fn inbound_invalid_signature_is_rejected_before_replay_commit() {
+        let (security, sender, signing_key, recipient) = inbound_fixture();
+        let mut message = point_to_point_message(&sender, &signing_key, &recipient);
+        message.content = b"tampered".to_vec();
+        let envelope = message.enclose_for(&recipient).expect("envelope");
+        let payload = envelope.encode().expect("envelope CBOR");
+
+        let error = security
+            .decode(&payload)
+            .await
+            .expect_err("invalid signature rejected");
+
+        assert!(matches!(
+            error,
+            crate::Error::Validation(MaError::InvalidMessageSignature)
+        ));
+    }
+
+    #[tokio::test]
+    async fn inbound_replay_is_rejected_after_authentication() {
+        let (security, sender, signing_key, recipient) = inbound_fixture();
+        let message = point_to_point_message(&sender, &signing_key, &recipient);
+        let payload = message
+            .enclose_for(&recipient)
+            .expect("envelope")
+            .encode()
+            .expect("envelope CBOR");
+
+        security.decode(&payload).await.expect("first delivery");
+        let error = security
+            .decode(&payload)
+            .await
+            .expect_err("replay rejected");
+
+        assert!(matches!(
+            error,
+            crate::Error::Validation(MaError::ReplayDetected)
+        ));
+    }
 
     fn test_doc() -> Document {
         let did = Did::new_url(
@@ -1050,37 +1293,52 @@ mod tests {
         bytes
     }
 
-    fn test_message() -> crate::Message {
-        use crate::{Did, SigningKey};
-        let did =
-            Did::new_identity("k51qzi5uqu5dkkciu33khkzbcmxtyhn376i1e83tya8kuy7z9euedzyr5nhoew")
-                .expect("valid did");
-        let did_id = did.id();
-        let sk = SigningKey::generate(did).expect("signing key");
-        crate::Message::new(
-            did_id,
+    async fn test_endpoint(secret: [u8; 32], ipv6: bool) -> IrohEndpoint {
+        test_endpoint_with_resolver(secret, Arc::new(RejectResolver), ipv6).await
+    }
+
+    async fn test_endpoint_with_resolver(
+        secret: [u8; 32],
+        resolver: Arc<dyn DidDocumentResolver>,
+        ipv6: bool,
+    ) -> IrohEndpoint {
+        let did = Did::new_url(
+            "k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr",
+            Some("enc"),
+        )
+        .expect("valid encryption DID");
+        let key = EncryptionKey::generate(did).expect("encryption key");
+        IrohEndpoint::new(secret, key, resolver, ipv6)
+            .await
+            .expect("test endpoint")
+    }
+
+    fn test_broadcast() -> (Message, Document) {
+        let (document, signing_key, _) = identity([3; 32]);
+        let message = Message::new(
+            document.id.clone(),
             String::new(),
             crate::service::MESSAGE_TYPE_BROADCAST,
             "application/octet-stream",
             b"test",
-            &sk,
+            &signing_key,
         )
-        .expect("message")
+        .expect("message");
+        (message, document)
     }
 
     // Requires network (iroh endpoint bind); run with `cargo test -- --ignored`.
     #[tokio::test]
     #[ignore = "requires iroh network runtime"]
     async fn service_returns_shared_inbox() {
-        use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
+        let mut endpoint = test_endpoint(test_secret(), true).await;
         let inbox_a = endpoint.service("/ma/inbox/0.0.1");
         let inbox_b = endpoint.service("/ma/inbox/0.0.1");
 
         // Both clones point to the same underlying queue.
-        inbox_a.push(0, 0, test_message());
+        inbox_a.push(0, 0, test_broadcast().0);
         assert_eq!(inbox_b.len(), 1, "cloned inbox should share the same queue");
 
         endpoint.close().await;
@@ -1089,10 +1347,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires iroh network runtime"]
     async fn service_auto_starts_router() {
-        use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
+        let mut endpoint = test_endpoint(test_secret(), true).await;
         assert!(endpoint.router.is_none(), "router should start stopped");
 
         endpoint.service("/ma/inbox/0.0.1");
@@ -1108,10 +1365,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires iroh network runtime"]
     async fn remove_service_updates_protocol_list() {
-        use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
+        let mut endpoint = test_endpoint(test_secret(), true).await;
         let _inbox = endpoint.service("/ma/custom/1.0");
         assert!(endpoint
             .services()
@@ -1137,10 +1393,9 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires iroh network runtime"]
     async fn service_after_start_router_triggers_reload() {
-        use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
-        let mut endpoint = IrohEndpoint::new(test_secret(), true).await.unwrap();
+        let mut endpoint = test_endpoint(test_secret(), true).await;
         endpoint.service("/ma/inbox/0.0.1");
         endpoint.start_router();
         assert!(
@@ -1173,7 +1428,6 @@ mod tests {
     #[tokio::test]
     #[ignore = "requires iroh network runtime"]
     async fn outbound_connection_receives_reply_streams() {
-        use super::IrohEndpoint;
         use crate::endpoint::MaEndpoint;
 
         let mut secret_a = test_secret();
@@ -1181,14 +1435,16 @@ mod tests {
         let mut secret_b = test_secret();
         secret_b[1] = 2;
 
-        let mut a = IrohEndpoint::new(secret_a, true).await.unwrap();
-        let mut b = IrohEndpoint::new(secret_b, true).await.unwrap();
+        let (broadcast, sender_document) = test_broadcast();
+        let resolver: Arc<dyn DidDocumentResolver> = Arc::new(FixedResolver(sender_document));
+        let mut a = test_endpoint_with_resolver(secret_a, Arc::clone(&resolver), true).await;
+        let mut b = test_endpoint_with_resolver(secret_b, resolver, true).await;
         let a_inbox = a.service("/ma/rpc/0.0.1");
         let _b_inbox = b.service("/ma/rpc/0.0.1");
 
         // A dials B (as the runtime does when delivering a reply to a peer
         // that never dialled it first).
-        a.send_broadcast_to(&b.id(), "/ma/rpc/0.0.1", &test_message())
+        a.send_broadcast_to(&b.id(), "/ma/rpc/0.0.1", &broadcast)
             .await
             .expect("A -> B send failed");
 
@@ -1204,7 +1460,7 @@ mod tests {
 
         // B sends to A — the cache fast path reuses the inbound
         // connection A dialled up, exercising A's outbound accept loop.
-        b.send_broadcast_to(&a.id(), "/ma/rpc/0.0.1", &test_message())
+        b.send_broadcast_to(&a.id(), "/ma/rpc/0.0.1", &broadcast)
             .await
             .expect("B -> A send failed");
 

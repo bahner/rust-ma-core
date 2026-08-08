@@ -368,20 +368,14 @@ impl SecretBundle {
     ///
     /// Verification method IDs use fixed fragments `#sign` and `#enc`.
     pub fn generate_identity(&self) -> Result<crate::GeneratedIdentity> {
-        use crate::{
-            identity::build_identity_from_keys, ipns_from_secret, Did, EncryptionKey, SigningKey,
-        };
+        use crate::{identity::build_identity_from_keys, ipns_from_secret, Did, SigningKey};
         let ipns = ipns_from_secret(self.ipns_secret_key)
             .map_err(|e| Error::Secrets(format!("ipns derivation failed: {e}")))?;
         let sign_did = Did::new_url(&ipns, Some("sign"))
             .map_err(|e| Error::Secrets(format!("sign did: {e}")))?;
-        let enc_did = Did::new_url(&ipns, Some("enc"))
-            .map_err(|e| Error::Secrets(format!("enc did: {e}")))?;
         let signing_key = SigningKey::from_private_key_bytes(sign_did, self.did_signing_key)
             .map_err(|e| Error::Secrets(format!("signing key: {e}")))?;
-        let encryption_key =
-            EncryptionKey::from_private_key_bytes(enc_did, self.did_encryption_key)
-                .map_err(|e| Error::Secrets(format!("encryption key: {e}")))?;
+        let encryption_key = self.encryption_key()?;
         let mut identity = build_identity_from_keys(&ipns, &signing_key, &encryption_key)
             .map_err(|e| Error::Secrets(format!("identity generation failed: {e}")))?;
         // Restore the original creation time — build_identity_from_keys sets
@@ -398,6 +392,16 @@ impl SecretBundle {
             .sign(&signing_key, &vm)
             .map_err(|e| Error::Secrets(format!("re-sign after created_at restore: {e}")))?;
         Ok(identity)
+    }
+
+    /// Reconstruct this identity's X25519 key-agreement key.
+    pub fn encryption_key(&self) -> Result<crate::EncryptionKey> {
+        let ipns = crate::ipns_from_secret(self.ipns_secret_key)
+            .map_err(|error| Error::Secrets(format!("ipns derivation failed: {error}")))?;
+        let did = crate::Did::new_url(&ipns, Some("enc"))
+            .map_err(|error| Error::Secrets(format!("enc did: {error}")))?;
+        crate::EncryptionKey::from_private_key_bytes(did, self.did_encryption_key)
+            .map_err(|error| Error::Secrets(format!("encryption key: {error}")))
     }
 
     /// Build a complete, signed [`crate::Document`] from this bundle and a

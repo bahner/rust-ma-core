@@ -155,8 +155,13 @@ pub use outbox::Outbox;
 /// This keeps the transport backend type internal while exposing
 /// [`MaEndpoint`] and [`Outbox`] as stable API surfaces.
 #[cfg(feature = "iroh")]
-pub async fn new_ma_endpoint(secret_bytes: [u8; 32], ipv6: bool) -> Result<Box<dyn MaEndpoint>> {
-    let endpoint = iroh::new_endpoint(secret_bytes, ipv6).await?;
+pub async fn new_ma_endpoint(
+    secret_bytes: [u8; 32],
+    recipient_key: EncryptionKey,
+    resolver: std::sync::Arc<dyn DidDocumentResolver>,
+    ipv6: bool,
+) -> Result<Box<dyn MaEndpoint>> {
+    let endpoint = iroh::new_endpoint(secret_bytes, recipient_key, resolver, ipv6).await?;
     Ok(Box::new(endpoint))
 }
 

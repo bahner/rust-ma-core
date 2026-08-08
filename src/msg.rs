@@ -519,6 +519,20 @@ impl Envelope {
         Ok(message)
     }
 
+    #[cfg(feature = "iroh")]
+    pub(crate) fn decrypt(&self, recipient_key: &EncryptionKey) -> Result<Message> {
+        self.verify()?;
+
+        let shared_secret = compute_shared_secret(&self.ephemeral_key, recipient_key)?;
+        let headers = self.decrypt_headers(&shared_secret)?;
+        headers.validate()?;
+        let content = self.decrypt_content(&shared_secret)?;
+
+        let mut message = Message::from_headers(headers)?;
+        message.content = content;
+        Ok(message)
+    }
+
     pub fn open_with_replay_guard(
         &self,
         recipient_key: &EncryptionKey,
