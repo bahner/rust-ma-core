@@ -148,13 +148,17 @@ mod tests {
         (outbox, captured)
     }
 
+    fn inbox_url(identity: &crate::GeneratedIdentity) -> String {
+        format!("{}#inbox", identity.document.id)
+    }
+
     #[tokio::test]
     async fn remote_message_is_transmitted_as_envelope() {
         let sender = generate_identity_from_secret([1; 32]).expect("sender identity");
         let recipient = generate_identity_from_secret([2; 32]).expect("recipient identity");
         let message = Message::new(
             sender.document.id.clone(),
-            recipient.document.id.clone(),
+            inbox_url(&recipient),
             crate::service::MESSAGE_TYPE_MESSAGE,
             "text/plain",
             b"secret",
@@ -222,7 +226,7 @@ mod tests {
         let recipient = generate_identity_from_secret([2; 32]).expect("recipient identity");
         let message = Message::new(
             sender.document.id.clone(),
-            recipient.document.id.clone(),
+            inbox_url(&recipient),
             crate::service::MESSAGE_TYPE_MESSAGE,
             "text/plain",
             b"secret",

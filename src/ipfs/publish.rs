@@ -678,6 +678,10 @@ mod tests {
         SigningKey::from_private_key_bytes(sign_url, private_key).expect("signing key")
     }
 
+    fn ipfs_url(identity: &crate::GeneratedIdentity) -> String {
+        format!("{}#ipfs", identity.document.id)
+    }
+
     fn expected_key_name(parts: &[&str], ipns_id: &str) -> String {
         let hash = blake3::hash(ipns_id.as_bytes());
         format!(
@@ -757,7 +761,7 @@ mod tests {
             generate_identity_publish_request(&identity.document, b"private-key").expect("payload");
         let message = Message::new(
             identity.document.id.clone(),
-            String::new(),
+            ipfs_url(&identity),
             MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
             "application/cbor",
             &payload,
@@ -779,7 +783,7 @@ mod tests {
             generate_identity_publish_request(&identity.document, b"private-key").expect("payload");
         let message = Message::new(
             identity.document.id.clone(),
-            String::new(),
+            ipfs_url(&identity),
             "application/x-test",
             "application/cbor",
             &payload,
@@ -806,7 +810,7 @@ mod tests {
                 .expect("payload");
         let message = Message::new(
             sender_identity.document.id.clone(),
-            String::new(),
+            ipfs_url(&sender_identity),
             MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
             "application/cbor",
             &payload,
@@ -832,7 +836,7 @@ mod tests {
         .expect("encode request");
         let message = Message::new(
             identity.document.id.clone(),
-            String::new(),
+            ipfs_url(&identity),
             MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
             "application/cbor",
             &payload,
@@ -891,7 +895,7 @@ mod tests {
                 .expect("publish payload");
             let message = Message::new(
                 identity.document.id.clone(),
-                String::new(),
+                ipfs_url(&identity),
                 MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
                 "application/cbor",
                 &payload,
@@ -925,7 +929,7 @@ mod tests {
                 .expect("publish payload");
             let message = Message::new(
                 identity.document.id.clone(),
-                String::new(),
+                ipfs_url(&identity),
                 MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
                 "application/cbor",
                 &payload,

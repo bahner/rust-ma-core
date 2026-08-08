@@ -1143,7 +1143,7 @@ mod tests {
     ) -> Message {
         Message::new(
             sender.id.clone(),
-            recipient.id.clone(),
+            format!("{}#inbox", recipient.id),
             crate::service::MESSAGE_TYPE_MESSAGE,
             "text/plain",
             b"secret",

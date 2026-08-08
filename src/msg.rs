@@ -92,23 +92,15 @@ impl Headers {
         Did::validate(&self.from)?;
         let recipient_is_empty = self.to.trim().is_empty();
 
-        match self.message_type.as_str() {
-            crate::service::MESSAGE_TYPE_BROADCAST => {
-                if !recipient_is_empty {
-                    return Err(MaError::BroadcastMustNotHaveRecipient);
-                }
+        if self.message_type == crate::service::MESSAGE_TYPE_BROADCAST {
+            if !recipient_is_empty {
+                return Err(MaError::BroadcastMustNotHaveRecipient);
             }
-            crate::service::MESSAGE_TYPE_MESSAGE => {
-                if recipient_is_empty {
-                    return Err(MaError::MessageRequiresRecipient);
-                }
-                Did::validate(&self.to).map_err(|_| MaError::InvalidRecipient)?;
+        } else {
+            if recipient_is_empty {
+                return Err(MaError::MessageRequiresRecipient);
             }
-            _ => {
-                if !recipient_is_empty {
-                    Did::validate(&self.to).map_err(|_| MaError::InvalidRecipient)?;
-                }
-            }
+            Did::validate_url(&self.to).map_err(|_| MaError::InvalidRecipient)?;
         }
         validate_message_freshness(self.created_at, self.exp)?;
 
@@ -139,7 +131,7 @@ impl Headers {
 /// // Create a signed message
 /// let msg = Message::new(
 ///     sender.document.id.clone(),
-///     recipient.document.id.clone(),
+///     format!("{}#inbox", recipient.document.id),
 ///     "application/vnd.ma.message",
 ///     "text/plain",
 ///     b"hello",
@@ -444,7 +436,7 @@ impl ReplayGuard {
 ///
 /// let msg = Message::new(
 ///     alice.document.id.clone(),
-///     bob.document.id.clone(),
+///     format!("{}#inbox", bob.document.id),
 ///     "application/vnd.ma.message",
 ///     "text/plain",
 ///     b"secret",
@@ -775,6 +767,10 @@ mod tests {
         )
     }
 
+    fn inbox_url(document: &Document) -> String {
+        format!("{}#inbox", document.id)
+    }
+
     #[test]
     fn did_round_trip() {
         let did = Did::new_url(
@@ -810,7 +806,7 @@ mod tests {
             fixture_documents();
         let message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -830,7 +826,7 @@ mod tests {
 
         assert_eq!(opened.payload(), b"look");
         assert_eq!(opened.from, sender_document.id);
-        assert_eq!(opened.to, recipient_document.id);
+        assert_eq!(opened.to, inbox_url(&recipient_document));
     }
 
     #[test]
@@ -838,7 +834,7 @@ mod tests {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let mut message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -856,7 +852,7 @@ mod tests {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let mut message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -878,7 +874,7 @@ mod tests {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let mut message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -901,7 +897,7 @@ mod tests {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let mut message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -925,7 +921,7 @@ mod tests {
         // Create with a valid 60-second window.
         let mut message = Message::new_with_exp(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -950,7 +946,7 @@ mod tests {
             fixture_documents();
         let message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.message",
             "text/plain",
             b"look",
@@ -998,7 +994,7 @@ mod tests {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let result = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/vnd.ma.broadcast",
             "text/plain",
             b"hello everyone",
@@ -1027,21 +1023,18 @@ mod tests {
     }
 
     #[test]
-    fn unknown_content_type_allows_empty_recipient() {
+    fn custom_message_requires_recipient() {
         let (sender_signing, _, sender_document, _, _, _) = fixture_documents();
-        let message = Message::new(
+        let result = Message::new(
             sender_document.id.clone(),
             String::new(),
             "application/x-ma-custom",
             "text/plain",
             b"whatever",
             &sender_signing,
-        )
-        .expect("custom content type message creation");
+        );
 
-        message
-            .verify_with_document(&sender_document)
-            .expect("custom type with empty recipient verifies");
+        assert!(matches!(result, Err(MaError::MessageRequiresRecipient)));
     }
 
     #[test]
@@ -1049,7 +1042,7 @@ mod tests {
         let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
         let message = Message::new(
             sender_document.id.clone(),
-            recipient_document.id.clone(),
+            inbox_url(&recipient_document),
             "application/x-ma-custom",
             "text/plain",
             b"whatever",
