@@ -874,6 +874,30 @@ mod tests {
     }
 
     #[test]
+    fn document_validation_rejects_subsecond_created_at_format() {
+        let identity = crate::generate_identity_from_secret([29u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.created_at = "2026-08-08T12:34:56.123Z".to_string();
+
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::InvalidCreatedAt(value)) if value == "2026-08-08T12:34:56.123Z"
+        ));
+    }
+
+    #[test]
+    fn document_validation_rejects_subsecond_updated_at_format() {
+        let identity = crate::generate_identity_from_secret([30u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.updated_at = "2026-08-08T12:34:56.123Z".to_string();
+
+        assert!(matches!(
+            document.validate(),
+            Err(MaError::InvalidUpdatedAt(value)) if value == "2026-08-08T12:34:56.123Z"
+        ));
+    }
+
+    #[test]
     fn generated_timestamp_uses_whole_utc_seconds() {
         let timestamp = now_iso_utc();
         assert!(is_valid_rfc3339_utc(&timestamp));

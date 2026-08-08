@@ -90,9 +90,9 @@ pub enum MaError {
     InvalidDocumentSignature,
     #[error("message signature is invalid")]
     InvalidMessageSignature,
-    #[error("invalid createdAt timestamp: {0}")]
+    #[error("invalid createdAt timestamp (must be RFC3339 UTC whole-second, e.g. 2026-08-08T12:34:56Z): {0}")]
     InvalidCreatedAt(String),
-    #[error("invalid updatedAt timestamp: {0}")]
+    #[error("invalid updatedAt timestamp (must be RFC3339 UTC whole-second, e.g. 2026-08-08T12:34:56Z): {0}")]
     InvalidUpdatedAt(String),
     #[error("missing envelope field: {0}")]
     MissingEnvelopeField(&'static str),
