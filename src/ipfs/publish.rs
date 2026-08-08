@@ -558,7 +558,6 @@ async fn confirm_pins_and_schedule_cleanup(
             kubo_url,
             &remote,
             published_cid,
-            options.overwrite,
             options.attempts,
             options.initial_backoff,
         )
@@ -600,26 +599,17 @@ async fn remote_pin_with_retry(
     kubo_url: &str,
     remote: &RemotePinOptions,
     cid: &str,
-    overwrite: bool,
     attempts: u32,
     initial_backoff: Duration,
 ) -> Result<()> {
     if attempts == 0 {
         return Err(anyhow!("remote pin attempts must be >= 1"));
     }
-    // Mirror the local policy: with overwrite the fresh remote pin gets the
-    // in-flight name and is renamed by the cleanup worker after the old pins
-    // are gone.
-    let add_name = if overwrite {
-        in_flight_pin_name(&remote.name)
-    } else {
-        remote.name.clone()
-    };
     let mut delay = initial_backoff;
     let mut previous_delay = Duration::ZERO;
     let mut last_error = None;
     for attempt in 1..=attempts {
-        match remote_pin_add_named(kubo_url, &remote.service, cid, &add_name).await {
+        match remote_pin_add_named(kubo_url, &remote.service, cid, &remote.name).await {
             Ok(()) => return Ok(()),
             Err(error) => last_error = Some(error),
         }

@@ -12,8 +12,7 @@ use tracing::{debug, warn};
 const DEFAULT_QUEUE_CAPACITY: usize = 64;
 const CLEANUP_YIELD: Duration = Duration::from_millis(100);
 
-/// Suffix marking a pin that has not been finalised yet. A surviving
-/// in-flight pin means an earlier replacement never completed.
+/// Legacy suffix marking a pin that was not finalised by an older publisher.
 const IN_FLIGHT_SUFFIX: &str = "~new";
 
 /// The temporary name protecting a fresh pin while stale pins are removed.
@@ -169,10 +168,9 @@ pub fn delete_local_pins_named_in_background(
 /// Schedule best-effort removal of all remote pins with this exact name,
 /// keeping only the current CID.
 ///
-/// Follows the same in-flight protocol as
-/// [`delete_local_pins_named_in_background`]; prefer
-/// [`remote_pin_replace_named`], which pins under the in-flight name and
-/// schedules this cleanup in one call. This does not remove local pins.
+/// Also migrates pins left under the legacy in-flight name. Prefer
+/// [`remote_pin_replace_named`], which pins the current CID and schedules this
+/// cleanup in one call. This does not remove local pins.
 pub fn delete_remote_pins_named_in_background(
     kubo_url: impl Into<String>,
     service: impl Into<String>,
@@ -191,10 +189,9 @@ pub fn delete_remote_pins_named_in_background(
 /// Pin `cid` on the remote service and schedule best-effort replacement of
 /// stale pins with this name.
 ///
-/// With `overwrite` the fresh pin is added under an in-flight name so no
-/// name-based cleanup can touch it; the background worker renames it to the
-/// requested name once every stale pin is gone. Returns whether cleanup was
-/// scheduled.
+/// With `overwrite` the fresh pin is added under the requested name before the
+/// background worker removes stale CIDs with that exact name. Returns whether
+/// cleanup was scheduled.
 pub async fn remote_pin_replace_named(
     kubo_url: &str,
     service: &str,
@@ -202,12 +199,7 @@ pub async fn remote_pin_replace_named(
     cid: &str,
     overwrite: bool,
 ) -> anyhow::Result<bool> {
-    let add_name = if overwrite {
-        in_flight_pin_name(name)
-    } else {
-        name.to_string()
-    };
-    crate::kubo::kubo::remote_pin_add_named(kubo_url, service, cid, &add_name).await?;
+    crate::kubo::kubo::remote_pin_add_named(kubo_url, service, cid, name).await?;
     Ok(overwrite && delete_remote_pins_named_in_background(kubo_url, service, name, cid))
 }
 
@@ -368,10 +360,22 @@ async fn cleanup_remote_pass(request: &PinCleanupRequest) -> bool {
         return removed_any;
     }
 
-    // Clean: finalise by moving the in-flight pin to the requested name.
-    // On failure the in-flight pin still protects the data for a later pass.
+    // Migrate pins stranded by the old in-flight protocol. Remote services
+    // commonly reject adding the same CID under a second name, so remove the
+    // temporary record before recreating it under the requested name.
     if temp_pins.iter().any(|cid| cid == &request.protected_cid) {
         if !final_pins.iter().any(|cid| cid == &request.protected_cid) {
+            if let Err(error) = crate::kubo::kubo::remote_pin_rm_named(
+                &request.kubo_url,
+                service,
+                &request.protected_cid,
+                &temp_name,
+            )
+            .await
+            {
+                warn!(name = %temp_name, service, cid = %request.protected_cid, error = %error, "legacy in-flight pin removal failed");
+                return false;
+            }
             if let Err(error) = crate::kubo::kubo::remote_pin_add_named(
                 &request.kubo_url,
                 service,
@@ -380,11 +384,9 @@ async fn cleanup_remote_pass(request: &PinCleanupRequest) -> bool {
             )
             .await
             {
-                warn!(name = %request.name, service, cid = %request.protected_cid, error = %error, "remote pin finalisation failed");
-                return false;
+                warn!(name = %request.name, service, cid = %request.protected_cid, error = %error, "legacy pin migration failed");
             }
-        }
-        if let Err(error) = crate::kubo::kubo::remote_pin_rm_named(
+        } else if let Err(error) = crate::kubo::kubo::remote_pin_rm_named(
             &request.kubo_url,
             service,
             &request.protected_cid,
@@ -392,7 +394,7 @@ async fn cleanup_remote_pass(request: &PinCleanupRequest) -> bool {
         )
         .await
         {
-            warn!(name = %temp_name, service, cid = %request.protected_cid, error = %error, "remote in-flight pin removal failed");
+            warn!(name = %temp_name, service, cid = %request.protected_cid, error = %error, "legacy in-flight pin removal failed");
         }
     }
     false

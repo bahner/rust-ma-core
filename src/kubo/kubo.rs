@@ -722,7 +722,7 @@ pub async fn remote_pin_add_named(
             ("arg", arg.as_str()),
             ("service", service),
             ("name", name),
-            ("background", "false"),
+            ("background", "true"),
         ])
         .send()
         .await?;
@@ -984,13 +984,12 @@ mod tests {
             if expected_length.is_none() {
                 if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
                     let headers = String::from_utf8_lossy(&request[..header_end]);
-                    expected_length = headers.lines().find_map(|line| {
+                    expected_length = Some(headers.lines().find_map(|line| {
                         line.split_once(':').and_then(|(name, value)| {
                             name.eq_ignore_ascii_case("content-length")
                                 .then(|| value.trim().parse::<usize>().expect("content length"))
                         })
-                    });
-                    assert!(expected_length.is_some(), "request must have a body");
+                    }).unwrap_or(0));
                 }
             }
 
@@ -1040,6 +1039,38 @@ mod tests {
             .to_ascii_lowercase()
             .contains("content-type: multipart/form-data;"));
         assert!(request.windows(document.len()).any(|part| part == document));
+    }
+
+    #[tokio::test]
+    async fn remote_pin_add_uses_final_name_in_background() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind Kubo mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept Kubo request");
+            let request = read_http_request(&mut stream);
+            let response =
+                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            stream
+                .write_all(response.as_bytes())
+                .expect("write Kubo response");
+            request
+        });
+
+        remote_pin_add_named(
+            &format!("http://{address}"),
+            "pinata",
+            "bafy-current",
+            "ma-runtime-joanna-root-2026-08-08",
+        )
+        .await
+        .expect("Kubo remote pin add");
+
+        let request = server.join().expect("Kubo mock thread");
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(request_text.starts_with(
+            "POST /api/v0/pin/remote/add?arg=%2Fipfs%2Fbafy-current&service=pinata&name=ma-runtime-joanna-root-2026-08-08&background=true HTTP/1.1"
+        ));
+        assert!(!request_text.contains("~new"));
     }
 
     #[test]
