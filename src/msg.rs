@@ -588,12 +588,12 @@ impl Envelope {
 
         let shared_secret = compute_shared_secret(&self.ephemeral_key, recipient_key)?;
         let headers = self.decrypt_headers(&shared_secret)?;
-        replay_guard.check_and_insert(&headers)?;
         let content = self.decrypt_content(&shared_secret)?;
 
         let mut message = Message::from_headers(headers)?;
         message.content = content;
         message.verify_with_document(sender_document)?;
+        replay_guard.check_and_insert(&message.headers())?;
         Ok(message)
     }
 
@@ -1048,6 +1048,35 @@ mod tests {
             &mut replay_guard,
         );
         assert!(matches!(second, Err(MaError::ReplayDetected)));
+    }
+
+    #[test]
+    fn rejected_envelope_does_not_consume_replay_id() {
+        let (sender_signing, _, sender_document, _, recipient_encryption, recipient_document) =
+            fixture_documents();
+        let message = Message::new(
+            sender_document.id.clone(),
+            inbox_url(&recipient_document),
+            "application/vnd.ma.message",
+            "text/plain",
+            b"look",
+            &sender_signing,
+        )
+        .expect("message creation");
+        let envelope = message
+            .enclose_for(&recipient_document)
+            .expect("message encloses");
+        let mut tampered = envelope.clone();
+        tampered.encrypted_content[0] ^= 0xff;
+        let mut guard = ReplayGuard::default();
+
+        assert!(tampered
+            .open_with_replay_guard(&recipient_encryption, &sender_document, &mut guard,)
+            .is_err());
+
+        envelope
+            .open_with_replay_guard(&recipient_encryption, &sender_document, &mut guard)
+            .expect("valid envelope remains acceptable");
     }
 
     #[test]
