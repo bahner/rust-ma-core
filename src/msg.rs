@@ -167,6 +167,11 @@ pub struct Message {
     pub signature: Vec<u8>,
 }
 
+struct MessageOptions {
+    exp: u64,
+    reply_to: Option<String>,
+}
+
 impl Message {
     pub fn new(
         from: impl Into<String>,
@@ -188,6 +193,31 @@ impl Message {
         )
     }
 
+    /// Create and sign a reply whose correlation header is covered by the signature.
+    pub fn new_reply(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        message_type: impl Into<String>,
+        content_type: impl Into<String>,
+        content: &[u8],
+        reply_to: impl Into<String>,
+        signing_key: &SigningKey,
+    ) -> Result<Self> {
+        let exp = now_unix_secs()? + DEFAULT_MESSAGE_TTL_SECS;
+        Self::new_with_options(
+            from,
+            to,
+            message_type,
+            content_type,
+            content,
+            MessageOptions {
+                exp,
+                reply_to: Some(reply_to.into()),
+            },
+            signing_key,
+        )
+    }
+
     pub fn new_with_exp(
         from: impl Into<String>,
         to: impl Into<String>,
@@ -195,6 +225,29 @@ impl Message {
         content_type: impl Into<String>,
         content: &[u8],
         exp: u64,
+        signing_key: &SigningKey,
+    ) -> Result<Self> {
+        Self::new_with_options(
+            from,
+            to,
+            message_type,
+            content_type,
+            content,
+            MessageOptions {
+                exp,
+                reply_to: None,
+            },
+            signing_key,
+        )
+    }
+
+    fn new_with_options(
+        from: impl Into<String>,
+        to: impl Into<String>,
+        message_type: impl Into<String>,
+        content_type: impl Into<String>,
+        content: &[u8],
+        options: MessageOptions,
         signing_key: &SigningKey,
     ) -> Result<Self> {
         let content_type_str: String = content_type.into();
@@ -206,9 +259,9 @@ impl Message {
             from: from.into(),
             to: to.into(),
             created_at: now_unix_secs()?,
-            exp,
+            exp: options.exp,
             content_type: content_type_str,
-            reply_to: None,
+            reply_to: options.reply_to,
             content: encoded,
             signature: Vec::new(),
         };
@@ -845,6 +898,32 @@ mod tests {
         message.content = b"tampered".to_vec();
         let result = message.verify_with_document(&sender_document);
         assert!(matches!(result, Err(MaError::InvalidMessageSignature)));
+    }
+
+    #[test]
+    fn reply_constructor_signs_correlation_header() {
+        let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
+        let mut reply = Message::new_reply(
+            sender_document.id.clone(),
+            inbox_url(&recipient_document),
+            "application/vnd.ma.rpc.reply",
+            "application/vnd.ma.term",
+            b":ok",
+            "request-id",
+            &sender_signing,
+        )
+        .expect("reply creation");
+
+        reply
+            .verify_with_document(&sender_document)
+            .expect("reply signature covers replyTo");
+        assert_eq!(reply.reply_to.as_deref(), Some("request-id"));
+
+        reply.reply_to = Some("different-request-id".to_string());
+        assert!(matches!(
+            reply.verify_with_document(&sender_document),
+            Err(MaError::InvalidMessageSignature)
+        ));
     }
 
     #[test]

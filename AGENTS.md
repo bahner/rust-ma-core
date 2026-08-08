@@ -129,6 +129,8 @@ so `did:ma:foo#bar` and `did:ma:foo` match the same entry.
 ## Message signing and validation
 
 - Messages are created via `Message::new(from, to, type, content_type, &content, &signing_key)`.
+- Replies use `Message::new_reply(...)` so `replyTo` is set before signing;
+  never assign `Message::reply_to` after construction.
 - `new` defaults TTL to `DEFAULT_MESSAGE_TTL_SECS`; `new_with_exp` takes an
   explicit nanosecond expiry.
 - `Envelope` wraps an encrypted `Message` for a specific recipient.
