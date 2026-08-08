@@ -480,6 +480,14 @@ impl Document {
         if self.proof.is_empty() {
             return Err(MaError::MissingProof);
         }
+        if self.proof.proof_type != DEFAULT_PROOF_TYPE {
+            return Err(MaError::InvalidProofType(self.proof.proof_type.clone()));
+        }
+        if self.proof.proof_purpose != DEFAULT_PROOF_PURPOSE {
+            return Err(MaError::InvalidProofPurpose(
+                self.proof.proof_purpose.clone(),
+            ));
+        }
 
         let (codec, sig_bytes) = signature_multibase_decode(&self.proof.proof_value)?;
         if codec != CODEC_EDDSA_SIG {
@@ -821,6 +829,30 @@ mod tests {
                 expected: CODEC_X25519_PUB,
                 actual: CODEC_ED25519_PUB,
             })
+        ));
+    }
+
+    #[test]
+    fn document_verification_requires_exact_proof_type() {
+        let identity = crate::generate_identity_from_secret([27u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.proof.proof_type = "DataIntegrityProof".to_string();
+
+        assert!(matches!(
+            document.verify(),
+            Err(MaError::InvalidProofType(value)) if value == "DataIntegrityProof"
+        ));
+    }
+
+    #[test]
+    fn document_verification_requires_exact_proof_purpose() {
+        let identity = crate::generate_identity_from_secret([28u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.proof.proof_purpose = "authentication".to_string();
+
+        assert!(matches!(
+            document.verify(),
+            Err(MaError::InvalidProofPurpose(value)) if value == "authentication"
         ));
     }
 

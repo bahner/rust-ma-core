@@ -78,6 +78,10 @@ pub enum MaError {
     InvalidKeyLength { expected: usize, actual: usize },
     #[error("proof is missing")]
     MissingProof,
+    #[error("invalid proof type: {0}")]
+    InvalidProofType(String),
+    #[error("invalid proof purpose: {0}")]
+    InvalidProofPurpose(String),
     #[error("document signature is invalid")]
     InvalidDocumentSignature,
     #[error("message signature is invalid")]

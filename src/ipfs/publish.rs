@@ -909,6 +909,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn validate_identity_publish_request_rejects_invalid_proof_metadata() {
+        let identity = test_identity(28);
+        let signing_key = test_signing_key(&identity);
+
+        let mut wrong_type = identity.document.clone();
+        wrong_type.proof.proof_type = "DataIntegrityProof".to_string();
+
+        let mut wrong_purpose = identity.document.clone();
+        wrong_purpose.proof.proof_purpose = "authentication".to_string();
+
+        for (name, document) in [("proof type", wrong_type), ("proof purpose", wrong_purpose)] {
+            let payload = generate_identity_publish_request(&document, b"private-key")
+                .expect("publish payload");
+            let message = Message::new(
+                identity.document.id.clone(),
+                String::new(),
+                MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
+                "application/cbor",
+                &payload,
+                &signing_key,
+            )
+            .expect("message");
+
+            let err = validate_identity_publish_request(&message.encode().expect("message cbor"))
+                .err()
+                .unwrap_or_else(|| panic!("accepted invalid {name}"));
+            assert!(
+                err.to_string()
+                    .contains("DID document signature verification failed"),
+                "unexpected error for {name}: {err}"
+            );
+        }
+    }
+
     #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
     #[test]
     fn normalizes_trailing_slash() {
