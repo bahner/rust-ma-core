@@ -375,17 +375,11 @@ impl Message {
     }
 
     fn headers_cbor(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        ciborium::ser::into_writer(&self.headers(), &mut out)
-            .map_err(|error| MaError::CborEncode(error.to_string()))?;
-        Ok(out)
+        to_cbor(&self.headers())
     }
 
     fn unsigned_headers_cbor(&self) -> Result<Vec<u8>> {
-        let mut out = Vec::new();
-        ciborium::ser::into_writer(&self.unsigned_headers(), &mut out)
-            .map_err(|error| MaError::CborEncode(error.to_string()))?;
-        Ok(out)
+        to_cbor(&self.unsigned_headers())
     }
 
     fn validate_content(&self) -> Result<()> {
@@ -411,6 +405,13 @@ impl Message {
             signature: headers.signature,
         })
     }
+}
+
+fn to_cbor<T: Serialize>(value: &T) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    ciborium::ser::into_writer(value, &mut out)
+        .map_err(|error| MaError::CborEncode(error.to_string()))?;
+    Ok(out)
 }
 
 /// Sliding-window replay guard for message deduplication.

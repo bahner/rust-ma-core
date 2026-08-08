@@ -79,6 +79,8 @@ pub mod inbox;
 pub mod interfaces;
 pub mod ipfs;
 #[cfg(feature = "iroh")]
+// inbound-only items (accept, open, endpoint_id, read-timeout) are unused on wasm;
+// wasm endpoints send but do not accept raw inbound connections.
 #[allow(dead_code)]
 mod iroh;
 pub mod key;
@@ -92,6 +94,7 @@ pub use kubo::{
 pub mod msg;
 mod multiformat;
 #[cfg(feature = "iroh")]
+// OutboxWire and related helpers are only consumed by the native iroh inbound path.
 #[allow(dead_code)]
 mod outbox;
 pub mod service;

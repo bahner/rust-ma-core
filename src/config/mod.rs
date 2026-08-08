@@ -296,37 +296,36 @@ fn load_yaml_mapping(path: &Path) -> Result<serde_yaml::Mapping> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn yaml_str(m: &serde_yaml::Mapping, key: &str) -> Option<String> {
+fn yaml_get<'a>(m: &'a serde_yaml::Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
     m.get(serde_yaml::Value::String(key.to_string()))
-        .and_then(|v| v.as_str())
-        .map(String::from)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn yaml_str(m: &serde_yaml::Mapping, key: &str) -> Option<String> {
+    yaml_get(m, key).and_then(|v| v.as_str()).map(String::from)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn yaml_path(m: &serde_yaml::Mapping, key: &str) -> Option<PathBuf> {
-    m.get(serde_yaml::Value::String(key.to_string()))
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from)
+    yaml_get(m, key).and_then(|v| v.as_str()).map(PathBuf::from)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn yaml_u64(m: &serde_yaml::Mapping, key: &str) -> Option<u64> {
-    m.get(serde_yaml::Value::String(key.to_string()))
-        .and_then(|v| match v {
-            serde_yaml::Value::Number(n) => n.as_u64(),
-            serde_yaml::Value::String(s) => s.parse::<u64>().ok(),
-            _ => None,
-        })
+    yaml_get(m, key).and_then(|v| match v {
+        serde_yaml::Value::Number(n) => n.as_u64(),
+        serde_yaml::Value::String(s) => s.parse::<u64>().ok(),
+        _ => None,
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn yaml_bool(m: &serde_yaml::Mapping, key: &str) -> Option<bool> {
-    m.get(serde_yaml::Value::String(key.to_string()))
-        .and_then(|v| match v {
-            serde_yaml::Value::Bool(b) => Some(*b),
-            serde_yaml::Value::String(s) => s.parse::<bool>().ok(),
-            _ => None,
-        })
+    yaml_get(m, key).and_then(|v| match v {
+        serde_yaml::Value::Bool(b) => Some(*b),
+        serde_yaml::Value::String(s) => s.parse::<bool>().ok(),
+        _ => None,
+    })
 }
 
 // ─── Config impl ─────────────────────────────────────────────────────────────

@@ -294,7 +294,11 @@ impl GatewayPool {
             }
         }
 
-        Err(errors.join(" | "))
+        Err(format!(
+            "all {} gateways failed: {}",
+            errors.len(),
+            errors.join("; ")
+        ))
     }
 
     async fn attempt_fetch<T, P>(
