@@ -662,18 +662,20 @@ mod tests {
         EncryptionKey,
         Document,
     ) {
-        let sender_did = Did::new_url("k51sender", None::<String>).expect("sender did");
-        let sender_sign_url = Did::new_url("k51sender", None::<String>).expect("sender sign did");
-        let sender_enc_url = Did::new_url("k51sender", None::<String>).expect("sender enc did");
+        let sender_ipns = crate::ipns_from_secret([1; 32]).expect("sender ipns");
+        let sender_did = Did::new_url(&sender_ipns, None::<String>).expect("sender did");
+        let sender_sign_url = Did::new_url(&sender_ipns, None::<String>).expect("sender sign did");
+        let sender_enc_url = Did::new_url(&sender_ipns, None::<String>).expect("sender enc did");
         let sender_signing = SigningKey::generate(sender_sign_url).expect("sender signing key");
         let sender_encryption =
             EncryptionKey::generate(sender_enc_url).expect("sender encryption key");
 
-        let recipient_did = Did::new_url("k51recipient", None::<String>).expect("recipient did");
+        let recipient_ipns = crate::ipns_from_secret([2; 32]).expect("recipient ipns");
+        let recipient_did = Did::new_url(&recipient_ipns, None::<String>).expect("recipient did");
         let recipient_sign_url =
-            Did::new_url("k51recipient", None::<String>).expect("recipient sign did");
+            Did::new_url(&recipient_ipns, None::<String>).expect("recipient sign did");
         let recipient_enc_url =
-            Did::new_url("k51recipient", None::<String>).expect("recipient enc did");
+            Did::new_url(&recipient_ipns, None::<String>).expect("recipient enc did");
         let recipient_signing =
             SigningKey::generate(recipient_sign_url).expect("recipient signing key");
         let recipient_encryption =

@@ -211,21 +211,24 @@ impl IpnsPathResolver for IpfsGatewayResolver {
 }
 
 fn parse_document_bytes(bytes: &[u8]) -> std::result::Result<Document, String> {
-    // Try DAG-CBOR first (canonical wire format; what dweb.link and Kubo return
-    // when the client sends Accept: application/vnd.ipld.dag-cbor).
-    if let Ok(doc) = Document::decode(bytes) {
-        return Ok(doc);
-    }
-    // Fallback: some gateways (e.g. a local Kubo that ignores the Accept header)
-    // may return DAG-JSON or plain JSON.
-    serde_json::from_slice::<Document>(bytes)
-        .map_err(|json_err| format!("CBOR decode failed and JSON fallback also failed: {json_err}"))
+    let document =
+        Document::decode(bytes).map_err(|err| format!("DAG-CBOR decode failed: {err}"))?;
+    document
+        .validate()
+        .map_err(|err| format!("document validation failed: {err}"))?;
+    document
+        .verify()
+        .map_err(|err| format!("document proof verification failed: {err}"))?;
+    Ok(document)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_document_bytes;
-    use crate::generate_identity_from_secret;
+    use super::{parse_document_bytes, IpfsGatewayResolver};
+    use crate::{
+        generate_identity_from_secret, ipfs::ttl_cache::Cached,
+        multiformat::signature_multibase_encode, CODEC_EDDSA_SIG,
+    };
 
     #[test]
     fn parses_dag_cbor_documents() {
@@ -238,20 +241,87 @@ mod tests {
     #[test]
     fn rejects_non_document_payloads() {
         let err = parse_document_bytes(b"<html>nope</html>").expect_err("invalid payload");
-        assert!(err.contains("CBOR decode failed"));
+        assert!(err.contains("DAG-CBOR decode failed"));
     }
 
     #[test]
-    fn parses_json_fallback_when_cbor_fails() {
+    fn rejects_json_documents() {
         let identity = generate_identity_from_secret([5u8; 32]).expect("identity");
         let json = serde_json::to_vec(&identity.document).expect("json serialize");
-        let parsed = parse_document_bytes(&json).expect("JSON fallback should succeed");
-        assert_eq!(parsed, identity.document);
+        let err = parse_document_bytes(&json).expect_err("resolver requires DAG-CBOR");
+        assert!(err.contains("DAG-CBOR decode failed"));
+    }
+
+    #[test]
+    fn rejects_document_with_mutated_payload() {
+        let identity = generate_identity_from_secret([9u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.updated_at = "2026-08-08T12:00:00Z".to_string();
+
+        let err = parse_document_bytes(&document.encode().expect("cbor"))
+            .expect_err("mutated payload must fail proof verification");
+        assert!(err.contains("document proof verification failed"));
+    }
+
+    #[test]
+    fn rejects_document_with_malformed_proof() {
+        let identity = generate_identity_from_secret([11u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.proof.proof_value = "not-multibase".to_string();
+
+        let err = parse_document_bytes(&document.encode().expect("cbor"))
+            .expect_err("malformed proof must fail verification");
+        assert!(err.contains("document proof verification failed"));
+    }
+
+    #[test]
+    fn rejects_document_with_unknown_proof_key() {
+        let identity = generate_identity_from_secret([13u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.proof.verification_method = format!("{}#unknown", document.id);
+
+        let err = parse_document_bytes(&document.encode().expect("cbor"))
+            .expect_err("unknown proof key must fail verification");
+        assert!(err.contains("document proof verification failed"));
+    }
+
+    #[test]
+    fn rejects_document_without_assertion_relationship() {
+        let identity = generate_identity_from_secret([15u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.assertion_method.clear();
+
+        let err = parse_document_bytes(&document.encode().expect("cbor"))
+            .expect_err("missing assertion relationship must fail validation");
+        assert!(err.contains("document validation failed"));
+    }
+
+    #[test]
+    fn rejects_document_with_invalid_signature() {
+        let identity = generate_identity_from_secret([17u8; 32]).expect("identity");
+        let mut document = identity.document;
+        document.proof.proof_value = signature_multibase_encode(CODEC_EDDSA_SIG, &[0; 64]);
+
+        let err = parse_document_bytes(&document.encode().expect("cbor"))
+            .expect_err("invalid signature must fail proof verification");
+        assert!(err.contains("document proof verification failed"));
+    }
+
+    #[test]
+    fn rejects_unverified_cached_document() {
+        let identity = generate_identity_from_secret([19u8; 32]).expect("identity");
+        let did = identity.document.id.clone();
+        let mut document = identity.document;
+        document.updated_at = "2026-08-08T12:00:00Z".to_string();
+
+        let err =
+            IpfsGatewayResolver::cached_result(Cached::Hit(document.encode().expect("cbor")), did)
+                .expect_err("cached document must be proof-verified");
+        assert!(err.to_string().contains("cached document parse failed"));
     }
 
     #[test]
     fn resolver_constructors_delegate_to_pool() {
-        use super::IpfsGatewayResolver;
         let resolver = IpfsGatewayResolver::new("https://example.test/ipfs");
         assert_eq!(
             resolver.pool().gateways(),

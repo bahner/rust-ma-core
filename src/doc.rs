@@ -1,7 +1,7 @@
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use ipld_core::ipld::Ipld;
 use serde::{Deserialize, Serialize};
-#[cfg(not(target_arch = "wasm32"))]
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use web_time::{SystemTime, UNIX_EPOCH};
 
 use crate::{
@@ -17,51 +17,17 @@ pub const DEFAULT_DID_CONTEXT: &[&str] = &["https://www.w3.org/ns/did/v1.1"];
 pub const DEFAULT_PROOF_TYPE: &str = "MultiformatSignature2023";
 pub const DEFAULT_PROOF_PURPOSE: &str = "assertionMethod";
 
-/// Returns the current UTC time as an ISO 8601 string with millisecond precision.
+/// Returns the current UTC time as an RFC 3339 string with whole-second precision.
 pub fn now_iso_utc() -> String {
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Bruk JS Date for ISO-format
-        return js_sys::Date::new_0()
-            .to_iso_string()
-            .as_string()
-            .unwrap_or_else(|| "1970-01-01T00:00:00.000Z".to_string());
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        let duration = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        unix_millis_to_iso(duration.as_secs(), duration.subsec_millis())
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn unix_millis_to_iso(secs: u64, millis: u32) -> String {
-    // Howard Hinnant's civil_from_days algorithm.
-    let days = i64::try_from(secs / 86_400).unwrap_or(i64::MAX);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = u64::try_from(z - era * 146_097).unwrap_or_default();
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = i64::try_from(yoe).unwrap_or(i64::MAX) + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    let tod = secs % 86400;
-    format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        y,
-        m,
-        d,
-        tod / 3600,
-        (tod % 3600) / 60,
-        tod % 60,
-        millis,
-    )
+    let unix_seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    i64::try_from(unix_seconds)
+        .ok()
+        .and_then(|seconds| OffsetDateTime::from_unix_timestamp(seconds).ok())
+        .and_then(|timestamp| timestamp.format(&Rfc3339).ok())
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -244,46 +210,7 @@ impl MaExtension {
 }
 
 fn is_valid_rfc3339_utc(value: &str) -> bool {
-    let trimmed = value.trim();
-    // Strict enough for ISO-8601 UTC produced by current implementations.
-    if !trimmed.ends_with('Z') {
-        return false;
-    }
-    let bytes = trimmed.as_bytes();
-    if bytes.len() < 20 {
-        return false;
-    }
-    let expected_punct = [
-        (4usize, b'-'),
-        (7usize, b'-'),
-        (10usize, b'T'),
-        (13usize, b':'),
-        (16usize, b':'),
-    ];
-    if expected_punct
-        .iter()
-        .any(|(idx, punct)| bytes.get(*idx).copied() != Some(*punct))
-    {
-        return false;
-    }
-    let core_digits = [0usize, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18];
-    if core_digits.iter().any(|idx| {
-        !bytes
-            .get(*idx)
-            .copied()
-            .unwrap_or_default()
-            .is_ascii_digit()
-    }) {
-        return false;
-    }
-    let tail = &trimmed[19..trimmed.len() - 1];
-    if tail.is_empty() {
-        return true;
-    }
-    if let Some(frac) = tail.strip_prefix('.') {
-        return !frac.is_empty() && frac.chars().all(|ch| ch.is_ascii_digit());
-    }
-    false
+    value.len() == 20 && value.ends_with('Z') && OffsetDateTime::parse(value, &Rfc3339).is_ok()
 }
 
 /// A `did:ma:` DID document.
@@ -465,7 +392,11 @@ impl Document {
             .assertion_method
             .first()
             .ok_or_else(|| MaError::UnknownVerificationMethod("assertionMethod".to_string()))?;
-        let vm = self.get_verification_method_by_id(assertion_id)?;
+        self.verifying_key_for_method(assertion_id)
+    }
+
+    fn verifying_key_for_method(&self, method_id: &str) -> Result<VerifyingKey> {
+        let vm = self.get_verification_method_by_id(method_id)?;
         let (codec, public_key_bytes) = public_key_multibase_decode(&vm.public_key_multibase)?;
         if codec != CODEC_ED25519_PUB {
             return Err(MaError::InvalidMulticodec {
@@ -550,7 +481,15 @@ impl Document {
         }
         let signature =
             Signature::from_slice(&sig_bytes).map_err(|_| MaError::InvalidDocumentSignature)?;
-        let public_key = self.assertion_method_public_key()?;
+        if !self
+            .assertion_method
+            .contains(&self.proof.verification_method)
+        {
+            return Err(MaError::UnknownVerificationMethod(
+                self.proof.verification_method.clone(),
+            ));
+        }
+        let public_key = self.verifying_key_for_method(&self.proof.verification_method)?;
         public_key
             .verify(&self.payload_hash()?, &signature)
             .map_err(|_| MaError::InvalidDocumentSignature)
@@ -749,5 +688,29 @@ mod tests {
         document
             .validate()
             .expect("validate should accept any ma value");
+    }
+
+    #[test]
+    fn timestamp_validation_requires_valid_whole_utc_seconds() {
+        assert!(is_valid_rfc3339_utc("2026-08-08T12:34:56Z"));
+        assert!(is_valid_rfc3339_utc("2024-02-29T23:59:59Z"));
+
+        for invalid in [
+            "2026-08-08T12:34:56.123Z",
+            "2026-08-08T12:34:56+00:00",
+            "2026-13-08T12:34:56Z",
+            "2026-02-30T12:34:56Z",
+            "2026-08-08T24:00:00Z",
+            " 2026-08-08T12:34:56Z",
+        ] {
+            assert!(!is_valid_rfc3339_utc(invalid), "accepted {invalid}");
+        }
+    }
+
+    #[test]
+    fn generated_timestamp_uses_whole_utc_seconds() {
+        let timestamp = now_iso_utc();
+        assert!(is_valid_rfc3339_utc(&timestamp));
+        assert!(!timestamp.contains('.'));
     }
 }

@@ -1,16 +1,16 @@
+use cid::{Cid, Version};
+use libp2p_identity::{PeerId, PublicKey};
 use nanoid::nanoid;
 
 use crate::error::{MaError, MaResult as Result};
 
 pub const DID_PREFIX: &str = "did:ma:";
+const LIBP2P_KEY_CODEC: u64 = 0x72;
 
 /// A parsed `did:ma:` identifier.
 ///
 /// Without a fragment this is a bare DID: `did:ma:<ipns>`.
 /// With a fragment it becomes a DID URL: `did:ma:<ipns>#<fragment>`.
-///
-/// Constructors enforce strict fragment validation (strict in what we send).
-/// Parsing via `try_from` is lenient (generous in what we receive).
 ///
 /// # Examples
 ///
@@ -18,16 +18,16 @@ pub const DID_PREFIX: &str = "did:ma:";
 /// use ma_core::Did;
 ///
 /// // Bare DID (identity)
-/// let id = Did::new_identity("k51qzi5uqu5abc").unwrap();
+/// let id = Did::new_identity("k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr").unwrap();
 /// assert!(id.is_bare());
-/// assert_eq!(id.base_id(), "did:ma:k51qzi5uqu5abc");
+/// assert_eq!(id.base_id(), "did:ma:k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr");
 ///
 /// // DID URL with auto-generated fragment
-/// let url = Did::new_url("k51qzi5uqu5abc", None::<String>).unwrap();
+/// let url = Did::new_url("k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr", None::<String>).unwrap();
 /// assert!(url.is_url());
 ///
-/// // Parse incoming DID URL (lenient)
-/// let parsed = Did::try_from("did:ma:k51qzi5uqu5abc#lobby").unwrap();
+/// // Parse an incoming DID URL
+/// let parsed = Did::try_from("did:ma:k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr#lobby").unwrap();
 /// assert_eq!(parsed.fragment.as_deref(), Some("lobby"));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -157,16 +157,25 @@ fn validate_identifier(input: &str) -> Result<()> {
     if input.is_empty() {
         return Err(MaError::MissingIdentifier);
     }
-    // IPNS identifiers are CIDv1 encoded in base36lower or base58btc;
-    // reject anything containing non-alphanumeric characters.
-    if !input.chars().all(|c| c.is_ascii_alphanumeric()) {
+
+    let cid = Cid::try_from(input).map_err(|_| MaError::InvalidIdentifier)?;
+    if cid.version() != Version::V1
+        || cid.codec() != LIBP2P_KEY_CODEC
+        || multibase::encode(multibase::Base::Base36Lower, cid.to_bytes()) != input
+    {
+        return Err(MaError::InvalidIdentifier);
+    }
+
+    let peer_id =
+        PeerId::from_multihash(cid.hash().to_owned()).map_err(|_| MaError::InvalidIdentifier)?;
+    let public_key = PublicKey::try_decode_protobuf(peer_id.as_ref().digest())
+        .map_err(|_| MaError::InvalidIdentifier)?;
+    if public_key.try_into_ed25519().is_err() {
         return Err(MaError::InvalidIdentifier);
     }
     Ok(())
 }
 
-/// Lenient fragment validation for parsing incoming data (Postel's law).
-/// Accepts any non-empty string of `[A-Za-z0-9_-]`.
 fn validate_fragment(input: &str) -> Result<()> {
     if input.is_empty()
         || !input
@@ -182,8 +191,9 @@ fn validate_fragment(input: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    const BARE: &str = "did:ma:k51qzi5uqu5abc";
-    const URL: &str = "did:ma:k51qzi5uqu5abc#lobby";
+    const IDENTIFIER: &str = "k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr";
+    const BARE: &str = "did:ma:k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr";
+    const URL: &str = "did:ma:k51qzi5uqu5dj9807pbuod1pplf0vxh8m4lfy3ewl9qbm2s8dsf9ugdf9gedhr#lobby";
 
     #[test]
     fn is_url_with_fragment() {
@@ -221,28 +231,39 @@ mod tests {
 
     #[test]
     fn new_url_none_generates_nanoid() {
-        let url = Did::new_url("k51qzi5uqu5abc", None::<String>).unwrap();
+        let url = Did::new_url(IDENTIFIER, None::<String>).unwrap();
         assert!(url.is_url());
         assert!(!url.fragment.unwrap().is_empty());
     }
 
     #[test]
     fn new_url_accepts_nanoid_fragment() {
-        let url = Did::new_url("k51qzi5uqu5abc", Some("bahner")).unwrap();
+        let url = Did::new_url(IDENTIFIER, Some("bahner")).unwrap();
         assert_eq!(url.fragment.as_deref(), Some("bahner"));
     }
 
     #[test]
     fn new_url_rejects_invalid_chars() {
-        assert!(Did::new_url("k51qzi5uqu5abc", Some("has space")).is_err());
-        assert!(Did::new_url("k51qzi5uqu5abc", Some("has.dot")).is_err());
-        assert!(Did::new_url("k51qzi5uqu5abc", Some("")).is_err());
+        assert!(Did::new_url(IDENTIFIER, Some("has space")).is_err());
+        assert!(Did::new_url(IDENTIFIER, Some("has.dot")).is_err());
+        assert!(Did::new_url(IDENTIFIER, Some("")).is_err());
     }
 
     #[test]
-    fn try_from_lenient_accepts_non_nanoid_fragment() {
-        // Postel's law: generous in what we receive
-        let did = Did::try_from("did:ma:k51qzi5uqu5abc#lobby").unwrap();
+    fn try_from_accepts_valid_fragment() {
+        let did = Did::try_from(URL).unwrap();
         assert_eq!(did.fragment.as_deref(), Some("lobby"));
+    }
+
+    #[test]
+    fn rejects_non_ipns_identifier() {
+        assert!(Did::validate("did:ma:k51qzi5uqu5abc").is_err());
+    }
+
+    #[test]
+    fn rejects_non_canonical_ipns_base() {
+        let cid = Cid::try_from(IDENTIFIER).expect("valid CID");
+        let base32 = multibase::encode(multibase::Base::Base32Lower, cid.to_bytes());
+        assert!(Did::validate(&format!("did:ma:{base32}")).is_err());
     }
 }
