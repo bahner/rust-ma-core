@@ -114,15 +114,15 @@ memory pressure), but it should not appear in normal application code.
 
 ### Fire-and-forget
 
-For truly one-off sends where you have no outbox in scope, the endpoint also
-provides `send_to`:
+Explicitly unencrypted broadcasts can be sent directly to a transport endpoint
+with `send_broadcast_to`:
 
 ```rust,ignore
-endpoint.send_to("did:ma:k51qzi5uqu5d…", INBOX_PROTOCOL_ID, &message).await?;
+endpoint.send_broadcast_to(endpoint_id, INBOX_PROTOCOL_ID, &message).await?;
 ```
 
-This dials, sends, and releases in one call. Prefer `outbox` for any peer you
-will message more than once — dialling on every send is wasteful.
+Point-to-point messages must use `outbox`, which resolves the recipient DID
+document and encrypts the wire payload.
 
 ## How this enforces the actor model
 

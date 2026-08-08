@@ -146,7 +146,7 @@ pub use inbox::Inbox;
 
 // ─── Re-export endpoint trait and implementations ───────────────────────────
 
-pub use endpoint::{MaEndpoint, DEFAULT_DELIVERY_PROTOCOL_ID};
+pub use endpoint::MaEndpoint;
 #[cfg(feature = "iroh")]
 pub use outbox::Outbox;
 

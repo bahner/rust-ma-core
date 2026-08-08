@@ -11,7 +11,6 @@ use crate::error::Result;
 use crate::inbox::Inbox;
 #[cfg(feature = "iroh")]
 use crate::ipfs::DidDocumentResolver;
-use crate::service::INBOX_PROTOCOL_ID;
 #[cfg(feature = "iroh")]
 use crate::transport::resolve_endpoint_for_protocol;
 #[cfg(feature = "iroh")]
@@ -22,9 +21,6 @@ use crate::Outbox;
 
 /// Default inbox capacity for services.
 pub const DEFAULT_INBOX_CAPACITY: usize = 256;
-
-/// Default protocol ID for unqualified send/request calls.
-pub const DEFAULT_DELIVERY_PROTOCOL_ID: &str = INBOX_PROTOCOL_ID;
 
 /// Shared interface for ma transport endpoints.
 ///
@@ -74,8 +70,16 @@ pub trait MaEndpoint: Send + Sync {
         crate::doc::MaExtension::new().services(self.services())
     }
 
-    /// Fire-and-forget to a target on a specific protocol.
-    async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()>;
+    /// Send an explicitly unencrypted broadcast to a transport endpoint.
+    ///
+    /// Point-to-point messages must use [`Self::outbox`] so the recipient DID
+    /// document is available for envelope encryption.
+    async fn send_broadcast_to(
+        &self,
+        target: &str,
+        protocol: &str,
+        message: &Message,
+    ) -> Result<()>;
 
     /// Gracefully shut down the endpoint, closing all cached connections.
     async fn close(&mut self);
@@ -120,10 +124,4 @@ pub trait MaEndpoint: Send + Sync {
         did: &str,
         protocol: &str,
     ) -> Result<Outbox>;
-
-    /// Fire-and-forget to a target on the default inbox protocol.
-    async fn send(&self, target: &str, message: &Message) -> Result<()> {
-        self.send_to(target, DEFAULT_DELIVERY_PROTOCOL_ID, message)
-            .await
-    }
 }

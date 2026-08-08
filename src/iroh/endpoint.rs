@@ -675,7 +675,7 @@ impl MaEndpoint for IrohEndpoint {
 
     async fn connect_outbox(
         &self,
-        _doc: &Document,
+        doc: &Document,
         endpoint_id: &str,
         did: &str,
         protocol: &str,
@@ -690,6 +690,8 @@ impl MaEndpoint for IrohEndpoint {
                 LoopbackWire {
                     inbox: inbox.clone(),
                 },
+                doc.clone(),
+                true,
                 did.to_string(),
                 protocol.to_string(),
             ));
@@ -703,13 +705,23 @@ impl MaEndpoint for IrohEndpoint {
         let connection = self.get_or_connect(endpoint_id, addr, protocol).await?;
         Ok(Outbox::from_transport(
             CachedChannel { connection },
+            doc.clone(),
+            false,
             did.to_string(),
             protocol.to_string(),
         ))
     }
 
-    async fn send_to(&self, target: &str, protocol: &str, message: &Message) -> Result<()> {
+    async fn send_broadcast_to(
+        &self,
+        target: &str,
+        protocol: &str,
+        message: &Message,
+    ) -> Result<()> {
         message.headers().validate()?;
+        if message.message_type != crate::service::MESSAGE_TYPE_BROADCAST {
+            return Err(Error::Validation(crate::MaError::InvalidMessageType));
+        }
         if target == self.id() {
             let normalized = normalize_protocol(protocol);
             let inbox = self
@@ -1176,7 +1188,7 @@ mod tests {
 
         // A dials B (as the runtime does when delivering a reply to a peer
         // that never dialled it first).
-        a.send_to(&b.id(), "/ma/rpc/0.0.1", &test_message())
+        a.send_broadcast_to(&b.id(), "/ma/rpc/0.0.1", &test_message())
             .await
             .expect("A -> B send failed");
 
@@ -1190,9 +1202,9 @@ mod tests {
             "B should have cached the inbound connection from A"
         );
 
-        // B sends to A — send_to's cache fast path reuses the inbound
+        // B sends to A — the cache fast path reuses the inbound
         // connection A dialled up, exercising A's outbound accept loop.
-        b.send_to(&a.id(), "/ma/rpc/0.0.1", &test_message())
+        b.send_broadcast_to(&a.id(), "/ma/rpc/0.0.1", &test_message())
             .await
             .expect("B -> A send failed");
 
