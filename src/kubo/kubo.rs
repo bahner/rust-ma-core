@@ -984,12 +984,18 @@ mod tests {
             if expected_length.is_none() {
                 if let Some(header_end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
                     let headers = String::from_utf8_lossy(&request[..header_end]);
-                    expected_length = Some(headers.lines().find_map(|line| {
-                        line.split_once(':').and_then(|(name, value)| {
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().expect("content length"))
-                        })
-                    }).unwrap_or(0));
+                    expected_length = Some(
+                        headers
+                            .lines()
+                            .find_map(|line| {
+                                line.split_once(':').and_then(|(name, value)| {
+                                    name.eq_ignore_ascii_case("content-length").then(|| {
+                                        value.trim().parse::<usize>().expect("content length")
+                                    })
+                                })
+                            })
+                            .unwrap_or(0),
+                    );
                 }
             }
 
@@ -1048,8 +1054,7 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept Kubo request");
             let request = read_http_request(&mut stream);
-            let response =
-                "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             stream
                 .write_all(response.as_bytes())
                 .expect("write Kubo response");
