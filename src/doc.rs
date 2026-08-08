@@ -70,7 +70,7 @@ impl VerificationMethod {
     }
 
     pub fn validate(&self) -> Result<()> {
-        Did::validate_url(&self.id)?;
+        Did::validate_resource(&self.id)?;
 
         match self.key_type.as_str() {
             "" => return Err(MaError::VerificationMethodMissingType),
@@ -560,7 +560,7 @@ impl Document {
 
     fn validate_relationships(&self, relationships: &[String], expected_codec: u64) -> Result<()> {
         for method_id in relationships {
-            Did::validate_url(method_id)?;
+            Did::validate_resource(method_id)?;
             let method = self.get_verification_method_by_id(method_id)?;
             let (codec, _) = public_key_multibase_decode(&method.public_key_multibase)?;
             if codec != expected_codec {

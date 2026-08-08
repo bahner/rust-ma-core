@@ -1132,6 +1132,20 @@ mod tests {
     }
 
     #[test]
+    fn message_accepts_bare_did_recipient() {
+        let (sender_signing, _, sender_document, _, _, recipient_document) = fixture_documents();
+        Message::new(
+            sender_document.id.clone(),
+            recipient_document.id,
+            "application/vnd.ma.message",
+            "text/plain",
+            b"secret",
+            &sender_signing,
+        )
+        .expect("bare DID recipient is a valid DID URL");
+    }
+
+    #[test]
     fn custom_message_requires_recipient() {
         let (sender_signing, _, sender_document, _, _, _) = fixture_documents();
         let result = Message::new(

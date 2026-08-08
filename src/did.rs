@@ -113,8 +113,13 @@ impl Did {
         Self::parse(input).map(|_| ())
     }
 
-    /// Validate that `input` is a DID URL (has a fragment).
+    /// Validate that `input` is a DID URL. The fragment is optional.
     pub fn validate_url(input: &str) -> Result<()> {
+        Self::validate(input)
+    }
+
+    /// Validate that `input` is a DID URL identifying a fragment resource.
+    pub fn validate_resource(input: &str) -> Result<()> {
         match Self::parse(input)? {
             (_, Some(_)) => Ok(()),
             (_, None) => Err(MaError::MissingFragment),
@@ -215,8 +220,14 @@ mod tests {
     }
 
     #[test]
-    fn validate_url_rejects_bare() {
-        assert!(Did::validate_url(BARE).is_err());
+    fn validate_url_accepts_bare() {
+        assert!(Did::validate_url(BARE).is_ok());
+    }
+
+    #[test]
+    fn validate_resource_requires_fragment() {
+        assert!(Did::validate_resource(URL).is_ok());
+        assert!(Did::validate_resource(BARE).is_err());
     }
 
     #[test]
