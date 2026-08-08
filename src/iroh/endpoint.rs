@@ -58,7 +58,7 @@ impl InboundSecurity {
         }
     }
 
-    async fn decode(&self, payload: &[u8]) -> Result<Message> {
+    async fn decode(&self, payload: &[u8], protocol: &str) -> Result<Message> {
         let (message, encrypted) = match Envelope::decode(payload) {
             Ok(envelope) => (envelope.decrypt(&self.recipient_key)?, true),
             Err(_) => (Message::decode(payload)?, false),
@@ -74,14 +74,27 @@ impl InboundSecurity {
             return Err(Error::Validation(MaError::InvalidRecipient));
         }
 
-        let sender_document = self.resolver.resolve(&message.from).await?;
-        message.verify_with_document(&sender_document)?;
+        // Identity-publish on /ma/ipfs/0.0.1 carries a full DID document in
+        // the payload. Verifying against a resolver-cached document here can
+        // deadlock first publication/recovery flows when the cached DID
+        // document is stale or invalid. Runtime-side ipfs handlers validate
+        // and verify the embedded DID document and then verify the outer
+        // message against that document.
+        if !skip_resolver_verification(protocol, &message.message_type) {
+            let sender_document = self.resolver.resolve(&message.from).await?;
+            message.verify_with_document(&sender_document)?;
+        }
         self.replay_guard
             .lock()
             .expect("replay guard lock poisoned")
             .check_and_insert(&message.headers())?;
         Ok(message)
     }
+}
+
+fn skip_resolver_verification(protocol: &str, message_type: &str) -> bool {
+    protocol == crate::service::IPFS_PROTOCOL_ID
+        && message_type == crate::service::MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST
 }
 
 fn same_base_did(left: &str, right: &str) -> Result<bool> {
@@ -327,7 +340,7 @@ impl IrohEndpoint {
 
                     let _ = send.finish();
 
-                    let message = match inbound_security.decode(&payload).await {
+                    let message = match inbound_security.decode(&payload, &proto).await {
                         Ok(message) => message,
                         Err(err) => {
                             warn!(
@@ -646,7 +659,10 @@ impl IrohEndpoint {
                                         }
                                     };
                                     let _ = send.finish();
-                                    let message = match inbound_security.decode(&payload).await {
+                                    let message = match inbound_security
+                                        .decode(&payload, &label)
+                                        .await
+                                    {
                                         Ok(m) => m,
                                         Err(e) => {
                                             web_sys::console::warn_1(
@@ -958,7 +974,11 @@ impl ProtocolHandler for InboxProtocolHandler {
 
                 let _ = send.finish();
 
-                let message = match handler.inbound_security.decode(&payload).await {
+                let message = match handler
+                    .inbound_security
+                    .decode(&payload, &handler.protocol)
+                    .await
+                {
                     Ok(message) => message,
                     Err(err) => {
                         warn!(
@@ -996,7 +1016,11 @@ impl ProtocolHandler for InboxProtocolHandler {
 
                 let _ = send.finish();
 
-                let message = match handler.inbound_security.decode(&payload).await {
+                let message = match handler
+                    .inbound_security
+                    .decode(&payload, &handler.protocol)
+                    .await
+                {
                     Ok(message) => message,
                     Err(err) => {
                         web_sys::console::warn_1(
@@ -1065,7 +1089,7 @@ fn message_created_at_secs(created_at: f64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{InboundSecurity, IrohEndpoint};
+    use super::{skip_resolver_verification, InboundSecurity, IrohEndpoint};
     use crate::{
         generate_identity_from_secret, Did, DidDocumentResolver, Document, EncryptionKey, MaError,
         Message, SigningKey,
@@ -1124,6 +1148,22 @@ mod tests {
         (identity.document, signing_key, encryption_key)
     }
 
+    #[test]
+    fn skip_resolver_verification_only_for_identity_publish_on_ipfs_protocol() {
+        assert!(skip_resolver_verification(
+            crate::service::IPFS_PROTOCOL_ID,
+            crate::service::MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
+        ));
+        assert!(!skip_resolver_verification(
+            crate::service::IPFS_PROTOCOL_ID,
+            crate::service::MESSAGE_TYPE_IPFS_REQUEST,
+        ));
+        assert!(!skip_resolver_verification(
+            crate::service::RPC_PROTOCOL_ID,
+            crate::service::MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
+        ));
+    }
+
     fn inbound_fixture() -> (InboundSecurity, Document, SigningKey, Document) {
         let (sender_document, sender_signing, _) = identity([1; 32]);
         let (recipient_document, _, recipient_encryption) = identity([2; 32]);
@@ -1163,7 +1203,7 @@ mod tests {
             .expect("envelope CBOR");
 
         let opened = security
-            .decode(&payload)
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
             .await
             .expect("authenticated message");
 
@@ -1177,7 +1217,7 @@ mod tests {
         let payload = message.encode().expect("message CBOR");
 
         let error = security
-            .decode(&payload)
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
             .await
             .expect_err("raw message rejected");
 
@@ -1201,7 +1241,10 @@ mod tests {
         .expect("broadcast");
         let payload = broadcast.encode().expect("broadcast CBOR");
 
-        let opened = security.decode(&payload).await.expect("verified broadcast");
+        let opened = security
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
+            .await
+            .expect("verified broadcast");
 
         assert_eq!(opened, broadcast);
     }
@@ -1225,7 +1268,7 @@ mod tests {
             .expect("envelope CBOR");
 
         let error = security
-            .decode(&payload)
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
             .await
             .expect_err("encrypted broadcast rejected");
 
@@ -1244,7 +1287,7 @@ mod tests {
         let payload = envelope.encode().expect("envelope CBOR");
 
         let error = security
-            .decode(&payload)
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
             .await
             .expect_err("invalid signature rejected");
 
@@ -1264,9 +1307,12 @@ mod tests {
             .encode()
             .expect("envelope CBOR");
 
-        security.decode(&payload).await.expect("first delivery");
+        security
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
+            .await
+            .expect("first delivery");
         let error = security
-            .decode(&payload)
+            .decode(&payload, crate::service::INBOX_PROTOCOL_ID)
             .await
             .expect_err("replay rejected");
 
