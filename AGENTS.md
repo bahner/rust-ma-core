@@ -11,6 +11,8 @@ both native and `wasm32-unknown-unknown`. No binary is produced here.
   `ma-core` is a shared dependency used by multiple downstream crates
   (`ma-runtime`, `ma-agent`, etc.). Unannounced changes here break all
   consumers silently. Always ask before editing any file here.
+- Write DRY, KISS code: avoid duplicated logic and prefer the simplest
+  implementation that meets the requirement.
 
 ---
 

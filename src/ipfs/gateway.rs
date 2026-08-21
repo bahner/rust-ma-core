@@ -312,7 +312,7 @@ impl GatewayPool {
     where
         P: Fn(&[u8]) -> std::result::Result<T, String>,
     {
-        let url = format!("{}{}", self.gateways[index], path.trim_start_matches('/'));
+        let url = gateway_url_for_path(&self.gateways[index], path);
         let Some(timeout) = self.remaining_timeout(deadline) else {
             return (
                 index,
@@ -371,7 +371,7 @@ impl GatewayPool {
         path: &str,
         deadline: Instant,
     ) -> (usize, std::result::Result<String, AttemptError>) {
-        let url = format!("{}{}", self.gateways[index], path.trim_start_matches('/'));
+        let url = gateway_url_for_path(&self.gateways[index], path);
         let Some(timeout) = self.remaining_timeout(deadline) else {
             return (
                 index,
@@ -519,6 +519,22 @@ fn push_default_public_gateways(gateways: &mut Vec<String>) {
     }
 }
 
+/// Build the URL to fetch `path` from `gateway`.
+/// `/ipns/<key>` on a domain gateway uses subdomain form to avoid the 301
+/// redirect that dweb.link and 4everland.io issue for path-style IPNS URLs.
+fn gateway_url_for_path(gateway: &str, path: &str) -> String {
+    if let Some(key) = path.strip_prefix("/ipns/").filter(|k| !k.is_empty()) {
+        if let Ok(parsed) = reqwest::Url::parse(gateway) {
+            if let Some(host) = parsed.host_str() {
+                if host != "localhost" && host.parse::<std::net::IpAddr>().is_err() {
+                    return format!("{}://{key}.ipns.{host}/", parsed.scheme());
+                }
+            }
+        }
+    }
+    format!("{}{}", gateway, path.trim_start_matches('/'))
+}
+
 fn resolved_ipfs_path(header_path: Option<&str>, final_path: &str) -> Option<String> {
     header_path
         .into_iter()
@@ -532,8 +548,8 @@ fn resolved_ipfs_path(header_path: Option<&str>, final_path: &str) -> Option<Str
 #[cfg(test)]
 mod tests {
     use super::{
-        fibonacci_cooldown, normalize_gateway_url, push_gateway, resolved_ipfs_path, GatewayPool,
-        MAX_COOLDOWN,
+        fibonacci_cooldown, gateway_url_for_path, normalize_gateway_url, push_gateway,
+        resolved_ipfs_path, GatewayPool, MAX_COOLDOWN,
     };
     use web_time::{Duration, Instant};
 
@@ -548,6 +564,33 @@ mod tests {
             Some("/ipfs/bafyredirect".to_string())
         );
         assert_eq!(resolved_ipfs_path(None, "/ipns/k51name"), None);
+    }
+
+    #[test]
+    fn gateway_url_for_path_uses_subdomain_for_domain_gateways() {
+        assert_eq!(
+            gateway_url_for_path("https://dweb.link/", "/ipns/k51abc"),
+            "https://k51abc.ipns.dweb.link/"
+        );
+        assert_eq!(
+            gateway_url_for_path("https://4everland.io/", "/ipns/k51abc"),
+            "https://k51abc.ipns.4everland.io/"
+        );
+        // IP gateways keep path form
+        assert_eq!(
+            gateway_url_for_path("http://127.0.0.1:8080/", "/ipns/k51abc"),
+            "http://127.0.0.1:8080/ipns/k51abc"
+        );
+        // localhost keeps path form
+        assert_eq!(
+            gateway_url_for_path("http://localhost:8080/", "/ipns/k51abc"),
+            "http://localhost:8080/ipns/k51abc"
+        );
+        // non-IPNS paths are unchanged
+        assert_eq!(
+            gateway_url_for_path("https://dweb.link/", "/ipfs/bafycid"),
+            "https://dweb.link/ipfs/bafycid"
+        );
     }
 
     #[test]
