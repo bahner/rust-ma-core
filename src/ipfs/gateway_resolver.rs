@@ -191,7 +191,8 @@ impl IpfsGatewayResolver {
 impl DidDocumentResolver for IpfsGatewayResolver {
     async fn resolve(&self, did: &str) -> crate::error::Result<Document> {
         let parsed = crate::Did::try_from(did).map_err(crate::error::Error::Validation)?;
-        let did_key = did.to_string();
+        // Always key by base DID — all DID-URLs under the same identity share one document.
+        let did_key = parsed.base_id();
 
         if let Some(cached) = self.cache.read(&did_key) {
             return Self::cached_result(cached, did_key);
