@@ -47,6 +47,7 @@ pub trait IpnsPathResolver: Send + Sync {
 pub struct IpfsGatewayResolver {
     pool: GatewayPool,
     cache: TtlCache<Vec<u8>>,
+    ipns_cache: TtlCache<String>,
 }
 
 impl Default for IpfsGatewayResolver {
@@ -88,6 +89,7 @@ impl IpfsGatewayResolver {
         Self {
             pool,
             cache: TtlCache::new(Duration::from_mins(1), Duration::from_secs(10)),
+            ipns_cache: TtlCache::new(Duration::from_mins(1), Duration::from_secs(10)),
         }
     }
 
@@ -100,6 +102,7 @@ impl IpfsGatewayResolver {
     #[must_use]
     pub fn with_cache_ttls(self, positive_ttl: Duration, negative_ttl: Duration) -> Self {
         self.cache.set_ttls(positive_ttl, negative_ttl);
+        self.ipns_cache.set_ttls(positive_ttl, negative_ttl);
         self
     }
 
@@ -128,7 +131,46 @@ impl IpfsGatewayResolver {
 
     /// Resolve an `/ipns/<name>` reference to its current `/ipfs/<cid>` path.
     pub async fn resolve_ipns_path(&self, path: &str) -> crate::error::Result<String> {
-        self.pool.resolve_ipns_path(path).await
+        self.resolve_ipns_path_cached(path).await
+    }
+
+    async fn resolve_ipns_path_cached(&self, path: &str) -> crate::error::Result<String> {
+        if let Some(cached) = self.ipns_cache.read(path) {
+            return Self::cached_ipns_result(cached, path);
+        }
+
+        let lock = self.ipns_cache.lock_for(path);
+        let _guard = lock.lock().await;
+
+        if let Some(cached) = self.ipns_cache.read(path) {
+            self.ipns_cache.release_lock(path, &lock);
+            return Self::cached_ipns_result(cached, path);
+        }
+
+        match self.pool.resolve_ipns_path(path).await {
+            Ok(resolved) => {
+                self.ipns_cache
+                    .write_hit(path.to_string(), resolved.clone());
+                self.ipns_cache.release_lock(path, &lock);
+                Ok(resolved)
+            }
+            Err(e) => {
+                let detail = e.to_string();
+                self.ipns_cache.write_miss(path.to_string(), detail);
+                self.ipns_cache.release_lock(path, &lock);
+                Err(e)
+            }
+        }
+    }
+
+    fn cached_ipns_result(cached: Cached<String>, path: &str) -> crate::error::Result<String> {
+        match cached {
+            Cached::Hit(resolved) => Ok(resolved),
+            Cached::Miss(detail) => Err(crate::error::Error::IpnsResolution {
+                path: path.to_string(),
+                detail,
+            }),
+        }
     }
 
     fn cached_result(cached: Cached<Vec<u8>>, did: String) -> crate::error::Result<Document> {
@@ -195,6 +237,7 @@ impl DidDocumentResolver for IpfsGatewayResolver {
 
     fn set_cache_ttls(&self, positive_ttl: Duration, negative_ttl: Duration) {
         self.cache.set_ttls(positive_ttl, negative_ttl);
+        self.ipns_cache.set_ttls(positive_ttl, negative_ttl);
     }
 
     fn cache_ttls(&self) -> Option<(Duration, Duration)> {
@@ -206,7 +249,7 @@ impl DidDocumentResolver for IpfsGatewayResolver {
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl IpnsPathResolver for IpfsGatewayResolver {
     async fn resolve_ipns_path(&self, path: &str) -> crate::error::Result<String> {
-        self.pool.resolve_ipns_path(path).await
+        self.resolve_ipns_path_cached(path).await
     }
 }
 
