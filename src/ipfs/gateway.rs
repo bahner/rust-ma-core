@@ -92,6 +92,31 @@ impl Default for GatewayPool {
 }
 
 impl GatewayPool {
+    /// Build a pool from exactly the caller-provided gateways.
+    ///
+    /// No localhost or public fallback gateways are added implicitly. Empty
+    /// entries are ignored after trimming, and the resulting list must contain
+    /// at least one gateway.
+    pub fn from_gateways<I, S>(gateways: I) -> crate::error::Result<Self>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut list = Vec::new();
+        for gateway in gateways {
+            let gateway = gateway.as_ref();
+            if !gateway.trim().is_empty() {
+                push_gateway(&mut list, gateway);
+            }
+        }
+        if list.is_empty() {
+            return Err(crate::error::Error::InvalidTransport(
+                "gateway list must not be empty".to_string(),
+            ));
+        }
+        Ok(Self::from_gateway_list(list))
+    }
+
     /// Build a public-gateway pool with no localhost probing.
     #[must_use]
     pub fn public_default() -> Self {
@@ -668,6 +693,32 @@ mod tests {
                 "https://4everland.io/".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn from_gateways_uses_exact_deduplicated_list() {
+        let pool = GatewayPool::from_gateways([
+            "https://example.test/ipfs",
+            "",
+            "https://example.test/ipfs/",
+            "http://localhost:8881/",
+        ])
+        .expect("gateway list");
+        assert_eq!(
+            pool.gateways(),
+            [
+                "https://example.test/ipfs/".to_string(),
+                "http://localhost:8881/".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn from_gateways_rejects_empty_lists() {
+        let result = GatewayPool::from_gateways(["", "  "]);
+        assert!(result
+            .err()
+            .is_some_and(|err| err.to_string().contains("gateway list must not be empty")));
     }
 
     #[test]
