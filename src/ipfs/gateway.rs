@@ -151,10 +151,14 @@ impl GatewayPool {
         #[cfg(not(target_arch = "wasm32"))]
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
+            .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
 
         #[cfg(target_arch = "wasm32")]
+        // reqwest's wasm backend delegates to browser fetch, whose default
+        // redirect mode is `follow`; the wasm ClientBuilder does not expose a
+        // redirect policy knob.
         let client = reqwest::Client::builder()
             .build()
             .unwrap_or_else(|_| reqwest::Client::new());
@@ -545,19 +549,48 @@ fn push_default_public_gateways(gateways: &mut Vec<String>) {
 }
 
 /// Build the URL to fetch `path` from `gateway`.
-/// `/ipns/<key>` on a domain gateway uses subdomain form to avoid the 301
-/// redirect that dweb.link and 4everland.io issue for path-style IPNS URLs.
+/// `/ipfs/<cid>` and `/ipns/<key>` on a domain gateway use subdomain form to
+/// avoid the redirects that dweb.link and 4everland.io issue for path-style
+/// URLs.
 fn gateway_url_for_path(gateway: &str, path: &str) -> String {
-    if let Some(key) = path.strip_prefix("/ipns/").filter(|k| !k.is_empty()) {
-        if let Ok(parsed) = reqwest::Url::parse(gateway) {
-            if let Some(host) = parsed.host_str() {
-                if host != "localhost" && host.parse::<std::net::IpAddr>().is_err() {
-                    return format!("{}://{key}.ipns.{host}/", parsed.scheme());
-                }
-            }
+    let normalised_path = path.trim_start_matches('/');
+    if let (Some(parsed), Some((namespace, root, suffix))) = (
+        reqwest::Url::parse(gateway).ok(),
+        subdomain_gateway_parts(normalised_path),
+    ) {
+        if let Some(host) = domain_gateway_host(&parsed) {
+            return format!("{}://{root}.{namespace}.{host}{suffix}", parsed.scheme());
         }
     }
-    format!("{}{}", gateway, path.trim_start_matches('/'))
+    format!("{}{}", gateway, normalised_path)
+}
+
+fn domain_gateway_host(gateway: &reqwest::Url) -> Option<&str> {
+    let host = gateway.host_str()?;
+    (host != "localhost" && host.parse::<std::net::IpAddr>().is_err()).then_some(host)
+}
+
+fn subdomain_gateway_parts(path: &str) -> Option<(&str, &str, String)> {
+    let (namespace, rest) = path
+        .strip_prefix("ipfs/")
+        .map(|rest| ("ipfs", rest))
+        .or_else(|| path.strip_prefix("ipns/").map(|rest| ("ipns", rest)))?;
+    let split_at = rest
+        .find(|character| character == '/' || character == '?')
+        .unwrap_or(rest.len());
+    let root = &rest[..split_at];
+    if root.is_empty() {
+        return None;
+    }
+    let remainder = &rest[split_at..];
+    let suffix = if remainder.is_empty() {
+        "/".to_string()
+    } else if remainder.starts_with('/') {
+        remainder.to_string()
+    } else {
+        format!("/{remainder}")
+    };
+    Some((namespace, root, suffix))
 }
 
 fn resolved_ipfs_path(header_path: Option<&str>, final_path: &str) -> Option<String> {
@@ -611,10 +644,17 @@ mod tests {
             gateway_url_for_path("http://localhost:8080/", "/ipns/k51abc"),
             "http://localhost:8080/ipns/k51abc"
         );
-        // non-IPNS paths are unchanged
         assert_eq!(
             gateway_url_for_path("https://dweb.link/", "/ipfs/bafycid"),
-            "https://dweb.link/ipfs/bafycid"
+            "https://bafycid.ipfs.dweb.link/"
+        );
+        assert_eq!(
+            gateway_url_for_path("https://dweb.link/", "ipfs/bafycid?format=raw"),
+            "https://bafycid.ipfs.dweb.link/?format=raw"
+        );
+        assert_eq!(
+            gateway_url_for_path("https://dweb.link/", "/ipfs/bafycid/child"),
+            "https://bafycid.ipfs.dweb.link/child"
         );
     }
 
