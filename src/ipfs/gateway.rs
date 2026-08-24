@@ -576,7 +576,7 @@ fn subdomain_gateway_parts(path: &str) -> Option<(&str, &str, String)> {
         .map(|rest| ("ipfs", rest))
         .or_else(|| path.strip_prefix("ipns/").map(|rest| ("ipns", rest)))?;
     let split_at = rest
-        .find(|character| character == '/' || character == '?')
+        .find(|character| ['/', '?'].contains(&character))
         .unwrap_or(rest.len());
     let root = &rest[..split_at];
     if root.is_empty() {
