@@ -410,7 +410,7 @@ impl GatewayPool {
             );
         };
 
-        let response = match self.client.head(&url).timeout(timeout).send().await {
+        let response = match self.client.get(&url).timeout(timeout).send().await {
             Ok(response) if response.status().is_success() => response,
             Ok(response) => {
                 return (
