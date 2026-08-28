@@ -1,9 +1,10 @@
 use chacha20poly1305::{
-    aead::{Aead, AeadCore, KeyInit},
+    aead::{Aead, Generate, KeyInit},
     Key, XChaCha20Poly1305, XNonce,
 };
 use ed25519_dalek::{Signature, Verifier};
 use nanoid::nanoid;
+use rand::{rand_core::UnwrapErr, rngs::SysRng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use web_time::{SystemTime, UNIX_EPOCH};
@@ -351,7 +352,7 @@ impl Message {
 
         let recipient_public_key =
             X25519PublicKey::from(recipient_document.key_agreement_public_key_bytes()?);
-        let ephemeral_secret = StaticSecret::random_from_rng(rand_core::OsRng);
+        let ephemeral_secret = StaticSecret::random_from_rng(&mut UnwrapErr(SysRng));
         let ephemeral_public = X25519PublicKey::from(&ephemeral_secret);
         let shared_secret = ephemeral_secret
             .diffie_hellman(&recipient_public_key)
@@ -678,12 +679,12 @@ fn compute_shared_secret(
 
 fn derive_symmetric_key(shared_secret: &[u8; 32], label: &str) -> Key {
     let derived = blake3::derive_key(label, shared_secret);
-    *Key::from_slice(&derived)
+    Key::from(derived)
 }
 
 fn encrypt(data: &[u8], key: Key) -> Result<Vec<u8>> {
     let cipher = XChaCha20Poly1305::new(&key);
-    let nonce = XChaCha20Poly1305::generate_nonce(&mut rand_core::OsRng);
+    let nonce = XNonce::generate_from_rng(&mut UnwrapErr(SysRng));
     let encrypted = cipher.encrypt(&nonce, data).map_err(|_| MaError::Crypto)?;
 
     let mut out = nonce.to_vec();
@@ -698,10 +699,10 @@ fn decrypt(data: &[u8], shared_secret: &[u8; 32], label: &str) -> Result<Vec<u8>
 
     let key = derive_symmetric_key(shared_secret, label);
     let cipher = XChaCha20Poly1305::new(&key);
-    let nonce = XNonce::from_slice(&data[..24]);
+    let nonce = XNonce::try_from(&data[..24]).map_err(|_| MaError::CiphertextTooShort)?;
 
     cipher
-        .decrypt(nonce, &data[24..])
+        .decrypt(&nonce, &data[24..])
         .map_err(|_| MaError::Crypto)
 }
 

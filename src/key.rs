@@ -1,5 +1,5 @@
 use ed25519_dalek::{Signer, SigningKey as Ed25519SigningKey, VerifyingKey};
-use rand_core::OsRng;
+use rand::{rand_core::UnwrapErr, rngs::SysRng};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret};
 
 use crate::{
@@ -45,7 +45,7 @@ pub struct SigningKey {
 
 impl SigningKey {
     pub fn generate(did: Did) -> Result<Self> {
-        let signing_key = Ed25519SigningKey::generate(&mut OsRng);
+        let signing_key = Ed25519SigningKey::generate(&mut UnwrapErr(SysRng));
         let public_key_multibase =
             public_key_multibase_encode(CODEC_ED25519_PUB, signing_key.verifying_key().as_bytes());
 
@@ -144,7 +144,7 @@ pub struct EncryptionKey {
 
 impl EncryptionKey {
     pub fn generate(did: Did) -> Result<Self> {
-        let private_key = StaticSecret::random_from_rng(OsRng);
+        let private_key = StaticSecret::random_from_rng(&mut UnwrapErr(SysRng));
         let public_key = X25519PublicKey::from(&private_key);
         let public_key_multibase =
             public_key_multibase_encode(CODEC_X25519_PUB, public_key.as_bytes());
