@@ -29,7 +29,6 @@ pub trait Service: Send + Sync {
 // ─── Well-known protocol constants (ma-core scope) ──────────────────────────
 
 pub const INBOX_PROTOCOL_ID: &str = "/ma/inbox/0.0.1";
-pub const RPC_PROTOCOL_ID: &str = "/ma/rpc/0.0.1";
 pub const IPFS_PROTOCOL_ID: &str = "/ma/ipfs/0.0.1";
 pub const CRUD_PROTOCOL_ID: &str = "/ma/crud/0.0.1";
 
@@ -48,8 +47,6 @@ pub const MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST: &str =
 /// `ipfs` ACL capability (see `ma_core::acl::CAP_IPFS`).
 pub const MESSAGE_TYPE_IPFS_REQUEST: &str = "application/vnd.ma.ipfs.request";
 pub const MESSAGE_TYPE_DOC: &str = "application/vnd.ma.doc";
-pub const MESSAGE_TYPE_RPC: &str = "application/vnd.ma.rpc.request";
-pub const MESSAGE_TYPE_RPC_REPLY: &str = "application/vnd.ma.rpc.reply";
 
 // ─── CRUD message types (/ma/crud/0.0.1) ────────────────────────────────────
 //

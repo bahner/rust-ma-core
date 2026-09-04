@@ -9,9 +9,10 @@
 //!
 //! | Capability | Meaning |
 //! |------------|---------|
-//! | `"rpc"`    | Send RPC messages via `/ma/rpc/0.0.1` |
+//! | `"inbox"`  | Deliver messages via `/ma/inbox/0.0.1` |
 //! | `"ipfs"`   | Store generic content via `/ma/ipfs/0.0.1` |
 //! | `"identity-publish"` | Publish DID documents via `/ma/ipfs/0.0.1` |
+//! | `"crud"`   | Access `/ma/crud/0.0.1` |
 //! | `"read"`   | Read entities, config, and namespace contents |
 //! | `"create"` | Create new namespaces or entities |
 //! | `"update"` | Update existing namespaces or entities |
@@ -48,12 +49,12 @@
 //! # Example
 //!
 //! ```rust
-//! # use ma_core::{AclMap, CapabilityEntry, check_cap, CAP_RPC};
+//! # use ma_core::{AclMap, CapabilityEntry, check_cap, CAP_INBOX};
 //! let mut acl = AclMap::new();
-//! acl.insert("*".to_string(), CapabilityEntry::from_caps(["rpc"]));
+//! acl.insert("*".to_string(), CapabilityEntry::from_caps([CAP_INBOX]));
 //! acl.insert("did:ma:k51evil".to_string(), CapabilityEntry::Deny);
-//! assert!(check_cap(&acl, "did:ma:k51good", CAP_RPC).is_ok());
-//! assert!(check_cap(&acl, "did:ma:k51evil", CAP_RPC).is_err());
+//! assert!(check_cap(&acl, "did:ma:k51good", CAP_INBOX).is_ok());
+//! assert!(check_cap(&acl, "did:ma:k51evil", CAP_INBOX).is_err());
 //! ```
 
 use std::collections::{BTreeSet, HashMap};
@@ -67,8 +68,6 @@ use crate::{Error, Result};
 
 /// Deliver messages to an endpoint's inbox (`/ma/inbox/0.0.1`).
 pub const CAP_INBOX: &str = "inbox";
-/// Send RPC messages via `/ma/rpc/0.0.1`.
-pub const CAP_RPC: &str = "rpc";
 /// Store generic content via `/ma/ipfs/0.0.1` (fire-and-forget).
 pub const CAP_IPFS: &str = "ipfs";
 /// Publish DID documents via `/ma/ipfs/0.0.1`.
@@ -367,57 +366,57 @@ mod tests {
 
     #[test]
     fn wildcard_rpc_allows_rpc() {
-        let acl = m(&[("*", allow(&[CAP_RPC]))]);
-        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_ok());
+        let acl = m(&[("*", allow(&[CAP_INBOX]))]);
+        assert!(check_cap(&acl, "did:ma:alice", CAP_INBOX).is_ok());
     }
 
     #[test]
     fn wildcard_rpc_denies_ipfs() {
-        let acl = m(&[("*", allow(&[CAP_RPC]))]);
+        let acl = m(&[("*", allow(&[CAP_INBOX]))]);
         assert!(check_cap(&acl, "did:ma:alice", CAP_IPFS).is_err());
     }
 
     #[test]
     fn explicit_deny_wins_over_wildcard_allow() {
         let acl = m(&[
-            ("*", allow(&[CAP_RPC, CAP_IPFS])),
+            ("*", allow(&[CAP_INBOX, CAP_IPFS])),
             ("did:ma:bandit", CapabilityEntry::Deny),
         ]);
-        assert!(check_cap(&acl, "did:ma:bandit", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "did:ma:bandit", CAP_INBOX).is_err());
     }
 
     #[test]
     fn exact_match_restricts_below_wildcard() {
         let acl = m(&[
-            ("*", allow(&[CAP_RPC, CAP_IPFS])),
-            ("did:ma:bob", allow(&[CAP_RPC])),
+            ("*", allow(&[CAP_INBOX, CAP_IPFS])),
+            ("did:ma:bob", allow(&[CAP_INBOX])),
         ]);
-        assert!(check_cap(&acl, "did:ma:bob", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:bob", CAP_INBOX).is_ok());
         assert!(check_cap(&acl, "did:ma:bob", CAP_IPFS).is_err());
     }
 
     #[test]
     fn did_url_caller_is_normalized() {
-        let acl = m(&[("did:ma:alice", allow(&[CAP_RPC, CAP_IPFS]))]);
-        assert!(check_cap(&acl, "did:ma:alice#sign", CAP_RPC).is_ok());
+        let acl = m(&[("did:ma:alice", allow(&[CAP_INBOX, CAP_IPFS]))]);
+        assert!(check_cap(&acl, "did:ma:alice#sign", CAP_INBOX).is_ok());
     }
 
     #[test]
     fn no_entry_default_deny() {
-        assert!(check_cap(&AclMap::new(), "did:ma:anyone", CAP_RPC).is_err());
+        assert!(check_cap(&AclMap::new(), "did:ma:anyone", CAP_INBOX).is_err());
     }
 
     #[test]
     fn wildcard_deny_blocks_all() {
         let acl = m(&[("*", CapabilityEntry::Deny)]);
-        assert!(check_cap(&acl, "did:ma:anyone", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "did:ma:anyone", CAP_INBOX).is_err());
     }
 
     #[test]
     fn local_entity_key_allowed() {
-        let acl = m(&[("#agent", allow(&[CAP_RPC]))]);
-        assert!(check_cap(&acl, "#agent", CAP_RPC).is_ok());
-        assert!(check_cap(&acl, "#other", CAP_RPC).is_err());
+        let acl = m(&[("#agent", allow(&[CAP_INBOX]))]);
+        assert!(check_cap(&acl, "#agent", CAP_INBOX).is_ok());
+        assert!(check_cap(&acl, "#other", CAP_INBOX).is_err());
     }
 
     #[test]
@@ -431,7 +430,7 @@ mod tests {
     #[test]
     fn wildcard_cap_grants_all_capabilities() {
         let acl = m(&[("did:ma:alice", allow(&["*"]))]);
-        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", CAP_INBOX).is_ok());
         assert!(check_cap(&acl, "did:ma:alice", CAP_IPFS).is_ok());
         assert!(check_cap(&acl, "did:ma:alice", "emote").is_ok());
         assert!(check_cap(&acl, "did:ma:alice", "admin").is_ok());
@@ -441,7 +440,7 @@ mod tests {
     fn owner_capability_is_just_a_string() {
         let acl = m(&[("did:ma:alice", allow(&["owner"]))]);
         assert!(check_cap(&acl, "did:ma:alice", "owner").is_ok());
-        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "did:ma:alice", CAP_INBOX).is_err());
     }
 
     #[test]
@@ -458,27 +457,27 @@ mod tests {
     #[test]
     fn local_wildcard_allows_any_hash_prefixed_caller() {
         // "#" matches any #-prefixed caller when there is no specific entry.
-        let acl = m(&[("#", allow(&[CAP_RPC]))]);
-        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_ok());
-        assert!(check_cap(&acl, "#scheduler", CAP_RPC).is_ok());
-        assert!(check_cap(&acl, "#any_entity", CAP_RPC).is_ok());
+        let acl = m(&[("#", allow(&[CAP_INBOX]))]);
+        assert!(check_cap(&acl, "#fortune", CAP_INBOX).is_ok());
+        assert!(check_cap(&acl, "#scheduler", CAP_INBOX).is_ok());
+        assert!(check_cap(&acl, "#any_entity", CAP_INBOX).is_ok());
     }
 
     #[test]
     fn local_wildcard_does_not_match_remote_callers() {
         // Remote DIDs do not start with '#', so "#" should not grant them.
-        let acl = m(&[("#", allow(&[CAP_RPC]))]);
-        assert!(check_cap(&acl, "did:ma:remote", CAP_RPC).is_err());
+        let acl = m(&[("#", allow(&[CAP_INBOX]))]);
+        assert!(check_cap(&acl, "did:ma:remote", CAP_INBOX).is_err());
     }
 
     #[test]
     fn specific_local_entity_wins_over_local_wildcard() {
         // "#fortune" is more specific: it restricts below the "#" wildcard.
         let acl = m(&[
-            ("#", allow(&[CAP_RPC, CAP_IPFS])),
-            ("#fortune", allow(&[CAP_RPC])), // only rpc, not ipfs
+            ("#", allow(&[CAP_INBOX, CAP_IPFS])),
+            ("#fortune", allow(&[CAP_INBOX])), // only rpc, not ipfs
         ]);
-        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "#fortune", CAP_INBOX).is_ok());
         assert!(check_cap(&acl, "#fortune", CAP_IPFS).is_err());
         // Other local entities still get rpc+ipfs from the wildcard.
         assert!(check_cap(&acl, "#other", CAP_IPFS).is_ok());
@@ -488,12 +487,12 @@ mod tests {
     fn local_wildcard_deny_blocks_all_local_entities() {
         let acl = m(&[
             ("#", CapabilityEntry::Deny),
-            ("*", allow(&[CAP_RPC])), // global wildcard would allow, but # deny wins
+            ("*", allow(&[CAP_INBOX])), // global wildcard would allow, but # deny wins
         ]);
-        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_err());
-        assert!(check_cap(&acl, "#any", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "#fortune", CAP_INBOX).is_err());
+        assert!(check_cap(&acl, "#any", CAP_INBOX).is_err());
         // Remote callers are unaffected by the "#" deny.
-        assert!(check_cap(&acl, "did:ma:remote", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:remote", CAP_INBOX).is_ok());
     }
 
     #[test]
@@ -501,18 +500,18 @@ mod tests {
         // "#fortune" explicit allow wins over "#" deny for that entity.
         let acl = m(&[
             ("#", CapabilityEntry::Deny),
-            ("#fortune", allow(&[CAP_RPC])),
+            ("#fortune", allow(&[CAP_INBOX])),
         ]);
-        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_ok());
-        assert!(check_cap(&acl, "#other", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "#fortune", CAP_INBOX).is_ok());
+        assert!(check_cap(&acl, "#other", CAP_INBOX).is_err());
     }
 
     #[test]
     fn global_wildcard_not_triggered_for_hash_caller_when_local_wildcard_present() {
         // When "#" deny is set, "*" allow must NOT override it for local callers.
-        let acl = m(&[("#", CapabilityEntry::Deny), ("*", allow(&[CAP_RPC]))]);
+        let acl = m(&[("#", CapabilityEntry::Deny), ("*", allow(&[CAP_INBOX]))]);
         // Local entity is denied by "#" — must not fall through to "*".
-        assert!(check_cap(&acl, "#fortune", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "#fortune", CAP_INBOX).is_err());
     }
 
     #[test]
@@ -527,15 +526,15 @@ mod tests {
     fn explicit_deny_without_wildcard() {
         // A bare Deny entry with no wildcard still denies.
         let acl = m(&[("did:ma:bandit", CapabilityEntry::Deny)]);
-        assert!(check_cap(&acl, "did:ma:bandit", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "did:ma:bandit", CAP_INBOX).is_err());
         // Others get default deny too (no wildcard).
-        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_err());
+        assert!(check_cap(&acl, "did:ma:alice", CAP_INBOX).is_err());
     }
 
     #[test]
     fn multiple_caps_in_single_entry() {
-        let acl = m(&[("did:ma:alice", allow(&[CAP_RPC, CAP_IPFS, CAP_READ]))]);
-        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_ok());
+        let acl = m(&[("did:ma:alice", allow(&[CAP_INBOX, CAP_IPFS, CAP_READ]))]);
+        assert!(check_cap(&acl, "did:ma:alice", CAP_INBOX).is_ok());
         assert!(check_cap(&acl, "did:ma:alice", CAP_IPFS).is_ok());
         assert!(check_cap(&acl, "did:ma:alice", CAP_READ).is_ok());
         assert!(check_cap(&acl, "did:ma:alice", CAP_CREATE).is_err());
@@ -547,13 +546,13 @@ mod tests {
         // Wildcard gives everyone rpc+ipfs, but bob only gets rpc.
         // Direct entry wins and caps don't accumulate from wildcard.
         let acl = m(&[
-            ("*", allow(&[CAP_RPC, CAP_IPFS])),
-            ("did:ma:bob", allow(&[CAP_RPC])),
+            ("*", allow(&[CAP_INBOX, CAP_IPFS])),
+            ("did:ma:bob", allow(&[CAP_INBOX])),
         ]);
-        assert!(check_cap(&acl, "did:ma:bob", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:bob", CAP_INBOX).is_ok());
         assert!(check_cap(&acl, "did:ma:bob", CAP_IPFS).is_err());
         // Alice (no direct entry) still gets both from wildcard.
-        assert!(check_cap(&acl, "did:ma:alice", CAP_RPC).is_ok());
+        assert!(check_cap(&acl, "did:ma:alice", CAP_INBOX).is_ok());
         assert!(check_cap(&acl, "did:ma:alice", CAP_IPFS).is_ok());
     }
 
@@ -561,8 +560,8 @@ mod tests {
     fn group_principal_allowed() {
         // "+group" keys are not resolved by check_cap; they pass through.
         // Resolution happens in the runtime's async check_full.
-        let acl = m(&[("*", allow(&[CAP_RPC]))]);
-        assert!(check_cap(&acl, "did:ma:anyone", CAP_RPC).is_ok());
+        let acl = m(&[("*", allow(&[CAP_INBOX]))]);
+        assert!(check_cap(&acl, "did:ma:anyone", CAP_INBOX).is_ok());
     }
 
     #[test]

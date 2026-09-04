@@ -908,7 +908,7 @@ mod tests {
         let mut reply = Message::new_reply(
             sender_document.id.clone(),
             inbox_url(&recipient_document),
-            "application/vnd.ma.rpc.reply",
+            "application/vnd.ma.message",
             "application/vnd.ma.term",
             b":ok",
             "request-id",

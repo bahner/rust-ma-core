@@ -130,7 +130,7 @@ pub use multiformat::{
 pub use acl::{
     check_cap, is_principal_key, is_valid_acl_key, normalize_principal, validate_acl_map, AclMap,
     CapabilityEntry, CAP_ACL, CAP_CREATE, CAP_CRUD, CAP_DELETE, CAP_IDENTITY_PUBLISH, CAP_INBOX,
-    CAP_IPFS, CAP_READ, CAP_RPC, CAP_UPDATE, GROUP_PREFIX, LOCAL_ENTITY_WILDCARD,
+    CAP_IPFS, CAP_READ, CAP_UPDATE, GROUP_PREFIX, LOCAL_ENTITY_WILDCARD,
 };
 
 // ─── Re-export service constants ────────────────────────────────────────────
@@ -140,7 +140,7 @@ pub use service::{
     CRUD_PROTOCOL_ID, INBOX_PROTOCOL_ID, IPFS_PROTOCOL_ID, MESSAGE_TYPE_BROADCAST,
     MESSAGE_TYPE_CHAT, MESSAGE_TYPE_CRUD, MESSAGE_TYPE_CRUD_REPLY, MESSAGE_TYPE_DOC,
     MESSAGE_TYPE_EMOTE, MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST, MESSAGE_TYPE_IPFS_REQUEST,
-    MESSAGE_TYPE_MESSAGE, MESSAGE_TYPE_RPC, MESSAGE_TYPE_RPC_REPLY, RPC_PROTOCOL_ID,
+    MESSAGE_TYPE_MESSAGE,
 };
 
 // ─── Re-export Inbox ────────────────────────────────────────────────────────

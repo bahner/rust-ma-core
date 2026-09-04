@@ -1159,7 +1159,7 @@ mod tests {
             crate::service::MESSAGE_TYPE_IPFS_REQUEST,
         ));
         assert!(!skip_resolver_verification(
-            crate::service::RPC_PROTOCOL_ID,
+            crate::service::INBOX_PROTOCOL_ID,
             crate::service::MESSAGE_TYPE_IDENTITY_PUBLISH_REQUEST,
         ));
     }
@@ -1485,12 +1485,12 @@ mod tests {
         let resolver: Arc<dyn DidDocumentResolver> = Arc::new(FixedResolver(sender_document));
         let mut a = test_endpoint_with_resolver(secret_a, Arc::clone(&resolver), true).await;
         let mut b = test_endpoint_with_resolver(secret_b, resolver, true).await;
-        let a_inbox = a.service("/ma/rpc/0.0.1");
-        let _b_inbox = b.service("/ma/rpc/0.0.1");
+        let a_inbox = a.service("/ma/inbox/0.0.1");
+        let _b_inbox = b.service("/ma/inbox/0.0.1");
 
         // A dials B (as the runtime does when delivering a reply to a peer
         // that never dialled it first).
-        a.send_broadcast_to(&b.id(), "/ma/rpc/0.0.1", &broadcast)
+        a.send_broadcast_to(&b.id(), "/ma/inbox/0.0.1", &broadcast)
             .await
             .expect("A -> B send failed");
 
@@ -1500,13 +1500,13 @@ mod tests {
             b.connection_cache
                 .lock()
                 .unwrap()
-                .contains_key(&(a.id(), "/ma/rpc/0.0.1".to_string())),
+                .contains_key(&(a.id(), "/ma/inbox/0.0.1".to_string())),
             "B should have cached the inbound connection from A"
         );
 
         // B sends to A — the cache fast path reuses the inbound
         // connection A dialled up, exercising A's outbound accept loop.
-        b.send_broadcast_to(&a.id(), "/ma/rpc/0.0.1", &broadcast)
+        b.send_broadcast_to(&a.id(), "/ma/inbox/0.0.1", &broadcast)
             .await
             .expect("B -> A send failed");
 
