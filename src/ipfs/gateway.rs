@@ -27,7 +27,7 @@ const MAX_FIBONACCI_STEPS: u32 = 12;
 /// is raced against it.
 const HEDGE_DELAY: Duration = Duration::from_secs(2);
 /// Hard deadline for one whole fetch/resolve across all gateways.
-const TOTAL_DEADLINE: Duration = Duration::from_secs(12);
+const TOTAL_DEADLINE: Duration = Duration::from_mins(1);
 /// Default per-request timeout, covering connection and body transfer.
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(6);
 
