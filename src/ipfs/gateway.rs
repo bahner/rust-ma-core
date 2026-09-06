@@ -13,8 +13,7 @@ use futures_util::stream::{FuturesUnordered, StreamExt};
 use web_time::{Duration, Instant};
 
 pub(crate) const LOCALHOST_GATEWAY: &str = "http://127.0.0.1:8080/";
-pub(crate) const DEFAULT_PUBLIC_GATEWAYS: [&str; 2] =
-    ["https://dweb.link/", "https://4everland.io/"];
+pub(crate) const DEFAULT_PUBLIC_GATEWAYS: [&str; 1] = ["https://ipfs.io/"];
 
 /// Base cooldown after a gateway failure. Escalates Fibonacci-style
 /// (base × 1, 1, 2, 3, 5, …) per consecutive failure; resets on success.
@@ -549,48 +548,10 @@ fn push_default_public_gateways(gateways: &mut Vec<String>) {
 }
 
 /// Build the URL to fetch `path` from `gateway`.
-/// `/ipfs/<cid>` and `/ipns/<key>` on a domain gateway use subdomain form to
-/// avoid the redirects that dweb.link and 4everland.io issue for path-style
-/// URLs.
+/// Path gateways use the plain path form: `{gateway}ipfs/{cid}` and
+/// `{gateway}ipns/{name}`.
 fn gateway_url_for_path(gateway: &str, path: &str) -> String {
-    let normalised_path = path.trim_start_matches('/');
-    if let (Some(parsed), Some((namespace, root, suffix))) = (
-        reqwest::Url::parse(gateway).ok(),
-        subdomain_gateway_parts(normalised_path),
-    ) {
-        if let Some(host) = domain_gateway_host(&parsed) {
-            return format!("{}://{root}.{namespace}.{host}{suffix}", parsed.scheme());
-        }
-    }
-    format!("{}{}", gateway, normalised_path)
-}
-
-fn domain_gateway_host(gateway: &reqwest::Url) -> Option<&str> {
-    let host = gateway.host_str()?;
-    (host != "localhost" && host.parse::<std::net::IpAddr>().is_err()).then_some(host)
-}
-
-fn subdomain_gateway_parts(path: &str) -> Option<(&str, &str, String)> {
-    let (namespace, rest) = path
-        .strip_prefix("ipfs/")
-        .map(|rest| ("ipfs", rest))
-        .or_else(|| path.strip_prefix("ipns/").map(|rest| ("ipns", rest)))?;
-    let split_at = rest
-        .find(|character| ['/', '?'].contains(&character))
-        .unwrap_or(rest.len());
-    let root = &rest[..split_at];
-    if root.is_empty() {
-        return None;
-    }
-    let remainder = &rest[split_at..];
-    let suffix = if remainder.is_empty() {
-        "/".to_string()
-    } else if remainder.starts_with('/') {
-        remainder.to_string()
-    } else {
-        format!("/{remainder}")
-    };
-    Some((namespace, root, suffix))
+    format!("{}{}", gateway, path.trim_start_matches('/'))
 }
 
 fn resolved_ipfs_path(header_path: Option<&str>, final_path: &str) -> Option<String> {
@@ -625,36 +586,18 @@ mod tests {
     }
 
     #[test]
-    fn gateway_url_for_path_uses_subdomain_for_domain_gateways() {
+    fn gateway_url_for_path_keeps_path_form() {
         assert_eq!(
-            gateway_url_for_path("https://dweb.link/", "/ipns/k51abc"),
-            "https://k51abc.ipns.dweb.link/"
+            gateway_url_for_path("https://ipfs.io/", "/ipfs/bafycid"),
+            "https://ipfs.io/ipfs/bafycid"
         );
         assert_eq!(
-            gateway_url_for_path("https://4everland.io/", "/ipns/k51abc"),
-            "https://k51abc.ipns.4everland.io/"
+            gateway_url_for_path("https://ipfs.io/", "/ipns/k51abc"),
+            "https://ipfs.io/ipns/k51abc"
         );
-        // IP gateways keep path form
         assert_eq!(
             gateway_url_for_path("http://127.0.0.1:8080/", "/ipns/k51abc"),
             "http://127.0.0.1:8080/ipns/k51abc"
-        );
-        // localhost keeps path form
-        assert_eq!(
-            gateway_url_for_path("http://localhost:8080/", "/ipns/k51abc"),
-            "http://localhost:8080/ipns/k51abc"
-        );
-        assert_eq!(
-            gateway_url_for_path("https://dweb.link/", "/ipfs/bafycid"),
-            "https://bafycid.ipfs.dweb.link/"
-        );
-        assert_eq!(
-            gateway_url_for_path("https://dweb.link/", "ipfs/bafycid?format=raw"),
-            "https://bafycid.ipfs.dweb.link/?format=raw"
-        );
-        assert_eq!(
-            gateway_url_for_path("https://dweb.link/", "/ipfs/bafycid/child"),
-            "https://bafycid.ipfs.dweb.link/child"
         );
     }
 
@@ -690,8 +633,7 @@ mod tests {
             pool.gateways(),
             [
                 "http://127.0.0.1:8080/".to_string(),
-                "https://dweb.link/".to_string(),
-                "https://4everland.io/".to_string(),
+                "https://ipfs.io/".to_string(),
             ]
         );
     }
@@ -699,13 +641,7 @@ mod tests {
     #[test]
     fn public_default_never_includes_localhost() {
         let pool = GatewayPool::public_default();
-        assert_eq!(
-            pool.gateways(),
-            [
-                "https://dweb.link/".to_string(),
-                "https://4everland.io/".to_string(),
-            ]
-        );
+        assert_eq!(pool.gateways(), ["https://ipfs.io/".to_string()]);
     }
 
     #[test]
@@ -715,8 +651,7 @@ mod tests {
             pool.gateways(),
             [
                 "https://example.test/ipfs/".to_string(),
-                "https://dweb.link/".to_string(),
-                "https://4everland.io/".to_string(),
+                "https://ipfs.io/".to_string(),
             ]
         );
     }
@@ -729,8 +664,7 @@ mod tests {
             [
                 "http://127.0.0.1:8080/".to_string(),
                 "https://example.test/".to_string(),
-                "https://dweb.link/".to_string(),
-                "https://4everland.io/".to_string(),
+                "https://ipfs.io/".to_string(),
             ]
         );
     }
@@ -781,7 +715,7 @@ mod tests {
 
         assert_eq!(
             pool.gateway_order(Instant::now(), &mut errors),
-            vec![0, 1, 2],
+            vec![0, 1],
             "all gateways available initially"
         );
 
@@ -789,7 +723,7 @@ mod tests {
         errors.clear();
         assert_eq!(
             pool.gateway_order(Instant::now(), &mut errors),
-            vec![1, 2],
+            vec![1],
             "failed gateway must be skipped during cooldown"
         );
         assert_eq!(errors.len(), 1);
@@ -799,7 +733,7 @@ mod tests {
         errors.clear();
         assert_eq!(
             pool.gateway_order(Instant::now(), &mut errors),
-            vec![0, 1, 2],
+            vec![0, 1],
             "success must clear the cooldown"
         );
         assert!(errors.is_empty());
@@ -814,7 +748,7 @@ mod tests {
         let mut errors = Vec::new();
         assert_eq!(
             pool.gateway_order(Instant::now(), &mut errors),
-            vec![0, 1, 2],
+            vec![0, 1],
             "a fetch must never dead-end on cooldowns alone"
         );
         assert!(errors.is_empty());
@@ -827,7 +761,7 @@ mod tests {
         let mut errors = Vec::new();
         assert_eq!(
             pool.gateway_order(Instant::now(), &mut errors),
-            vec![0, 1, 2],
+            vec![0, 1],
             "zero base cooldown must never block a gateway"
         );
     }

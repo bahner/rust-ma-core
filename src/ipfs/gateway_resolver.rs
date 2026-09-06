@@ -371,8 +371,7 @@ mod tests {
             resolver.pool().gateways(),
             [
                 "https://example.test/ipfs/".to_string(),
-                "https://dweb.link/".to_string(),
-                "https://4everland.io/".to_string(),
+                "https://ipfs.io/".to_string(),
             ]
         );
     }
