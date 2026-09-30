@@ -84,13 +84,12 @@ Send an encrypted message to another actor — all you need is their DID:
 
 ```rust,ignore
 use ma_core::{
-    Envelope, IpfsGatewayResolver, Message,
-    ipfs::gateway_resolver::DidDocumentResolver,
+    DidDocumentResolver, Envelope, KuboDidResolver, Message,
     service::MESSAGE_TYPE_MESSAGE,
 };
 
 // Resolve the recipient's DID document to get their encryption key.
-let resolver = IpfsGatewayResolver::new("http://127.0.0.1:5001");
+let resolver = KuboDidResolver::new("http://127.0.0.1:5001");
 let their_doc = resolver.resolve("did:ma:k51qzi5uqu5d…").await?;
 
 // Sign with your key, encrypt for them.
@@ -130,18 +129,20 @@ check_cap(&acl, &msg.from, CAP_RPC)?;
   replayed envelopes using a sliding timestamp window.
 - **Transport** — `new_ma_endpoint` starts an iroh QUIC endpoint. Register
   services by protocol ID string; each returns an `Inbox<Message>`. Outboxes
-  dial peers on demand via DID resolution. `IpfsGatewayResolver` resolves DIDs
-  on both wasm and native.
+  dial peers on demand via DID resolution, supplied by the caller
+  (`KuboDidResolver` on native; a verified-fetch resolver on wasm).
 - **Access control** — `AclMap` + `check_cap`. Capability strings, deny-wins
   evaluation, wildcard principals, local fragment IDs, and group principals.
   See [doc/acl.md](doc/acl.md).
 
 The crate compiles to both native and `wasm32-unknown-unknown`. The same
 identity, messaging, and transport code runs in a browser tab and on a server.
-Only Kubo RPC (the IPFS daemon HTTP API) is native-only, because it requires
-a network-capable HTTP client that is not available in wasm. Browser actors
-reach Kubo indirectly through `ma-runtime` over iroh. See
-[doc/ipfs-publish.md](doc/ipfs-publish.md) for that flow.
+IPFS itself is native-only: all publishing, pinning, DID/IPNS resolution and
+content reads go through the Kubo RPC client (`kubo` feature), which needs a
+network-capable HTTP client that is not available in wasm. wasm clients have no
+IPFS backend in `ma-core` and must supply their own — verified-fetch in the
+browser, or a `ma-runtime` over iroh. See
+[doc/ipfs-publish.md](doc/ipfs-publish.md) for the publish flow.
 
 ## iroh as transport layer
 
@@ -155,9 +156,9 @@ From `ma-core`'s perspective, the nicest thing about iroh is that dialling
 a peer requires nothing but its endpoint ID — a 32-byte public key. There is
 no IP address to manage, no DNS, no port forwarding. An actor publishes its
 iroh endpoint ID in its DID document, and any other actor that can resolve
-that DID can dial in. `IpfsGatewayResolver` resolves the DID from IPFS and
-hands back the endpoint ID; `Outbox` dials the connection. The whole sequence
-is two calls:
+that DID can dial in. A `DidDocumentResolver` (Kubo RPC on native, verified-fetch
+on wasm) resolves the DID from IPFS and hands back the endpoint ID; `Outbox`
+dials the connection. The whole sequence is two calls:
 
 ```rust,ignore
 let outbox = endpoint.outbox(&resolver, &their_did, INBOX_PROTOCOL_ID).await?;
@@ -231,9 +232,9 @@ document format and the message wire protocol.
 |------------|--------|--------|
 | `Inbox`, `Message`, transport parsing | yes | yes |
 | iroh QUIC transport (`iroh` feature) | yes | yes |
-| `IpfsGatewayResolver` (DID fetch) | yes | yes |
+| DID resolution | host-supplied (`DidDocumentResolver`) | `KuboDidResolver` (Kubo RPC) |
 | `SecretBundle` crypto, `Config` serialization | yes | yes |
-| Kubo RPC — publish, pin, DAG write | no | yes (`kubo` feature) |
+| Kubo RPC — publish, pin, DAG read/write, IPNS | no | yes (`kubo` feature) |
 | `Config::from_args`, filesystem, CLI | no | yes |
 
 See [doc/wasm.md](doc/wasm.md) for the full wasm story, including the

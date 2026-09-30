@@ -38,10 +38,9 @@ src/
   interfaces.rs       — DidPublisher, IpfsPublisher traits
   ipfs/
     mod.rs            — public re-exports for ipfs sub-modules
-    gateway.rs        — GatewayPool: HTTP transport, hedged failover, per-gateway Fibonacci cooldowns, timeouts
-    ttl_cache.rs      — TtlCache: generic positive/negative TTL cache + in-flight locks
-    gateway_resolver.rs — IpfsGatewayResolver (GatewayPool + TtlCache),
-                        DidDocumentResolver + IpnsPathResolver traits
+    resolver.rs       — DidDocumentResolver + IpnsPathResolver traits (the read
+                        contract; also implemented by kubo::KuboDidResolver) and
+                        parse_document_bytes
     publish.rs        — IdentityPublishRequest, IpfsStoreRequest, IpfsDidPublisher,
                         generate_identity_publish_request, generate_ipfs_store_request,
                         validate_identity_publish_request, validate_ipfs_request
@@ -88,9 +87,12 @@ are additionally guarded by `#[cfg(not(target_arch = "wasm32"))]`.
   the public API. They live in `src/kubo/` which is `pub(crate)`.
 - `IpfsDidPublisher` lives in `src/ipfs/publish.rs` and is the only DID
   publisher — there is no duplicate in `src/kubo/`.
-- Read side vs write side: `ipfs::GatewayPool` (and everything built on it)
-  is read-only and wasm-safe; all publishing/pinning/key operations go through
-  `crate::kubo` (native, `kubo` feature). Never mix the two directions.
+- Kubo RPC is the single IPFS backend: publishing, pinning, key management,
+  DID/IPNS resolution and content reads all go through `crate::kubo` (native,
+  `kubo` feature). There is deliberately **no HTTP gateway in ma-core** — wasm
+  clients supply their own IPFS behind the `DidDocumentResolver` /
+  `IpnsPathResolver` traits (ma-operator uses verified-fetch), while native
+  clients use Kubo directly or through `ma-runtime`.
 - Protocol IDs always include the leading `/`: `/ma/inbox/0.0.1`, etc.
 
 ---

@@ -44,13 +44,13 @@
 //! ### wasm vs native
 //!
 //! - `ma-core` supports both wasm and native targets.
-//! - `IpfsGatewayResolver` (HTTP gateway DID fetch) is available on wasm and native.
-//! - Native IPFS RPC write/pin APIs are native-only (`not(wasm32)` + `kubo` feature).
-//! - wasm builds expose only `ipfs::gateway_resolver` (no native RPC helpers).
+//! - All IPFS work (publish, pin, DID/IPNS resolution, content reads) is native
+//!   only, through the Kubo RPC client (`not(wasm32)` + `kubo` feature).
+//! - wasm builds carry no IPFS backend: the `DidDocumentResolver` /
+//!   `IpnsPathResolver` traits are the contract, and a wasm client supplies its
+//!   own implementation (verified-fetch) or reaches Kubo through `ma-runtime`.
 //! - `config` serialization and `SecretBundle` crypto work on wasm.
 //! - `config` filesystem paths, CLI/env merging, and file I/O are native-only.
-//! - If your wasm application needs native IPFS RPC write/pin operations, provide
-//!   them in a native companion layer.
 
 #![forbid(unsafe_code)]
 #![allow(
@@ -89,7 +89,7 @@ mod kubo;
 #[cfg(all(feature = "kubo", not(target_arch = "wasm32")))]
 pub use kubo::{
     cat_bytes, delete_local_pins_named_in_background, delete_remote_pins_named_in_background,
-    in_flight_pin_name, ipfs_add, remote_pin_add_named, remote_pin_replace_named,
+    in_flight_pin_name, ipfs_add, remote_pin_add_named, remote_pin_replace_named, KuboDidResolver,
 };
 pub mod msg;
 mod multiformat;
@@ -189,8 +189,7 @@ pub use config::{BrowserIdentityExport, Config, SecretBundle};
 
 // ─── Re-export DID resolution ───────────────────────────────────────────────
 
-pub use ipfs::gateway::GatewayPool;
-pub use ipfs::gateway_resolver::{DidDocumentResolver, IpfsGatewayResolver, IpnsPathResolver};
+pub use ipfs::resolver::{DidDocumentResolver, IpnsPathResolver};
 
 // ─── Re-export existing modules ─────────────────────────────────────────────
 

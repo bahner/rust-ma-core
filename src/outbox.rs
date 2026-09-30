@@ -17,7 +17,7 @@
 //! ```
 
 use crate::error::{Error, Result};
-use crate::{Did, Document, Message};
+use crate::{Document, Message};
 use async_trait::async_trait;
 
 #[async_trait]
@@ -64,12 +64,16 @@ impl Outbox {
     /// Validates the message headers, encrypts non-broadcast remote messages,
     /// and transmits the resulting CBOR payload.
     ///
+    /// Loopback (self-addressed) delivery is never encrypted: it is handed
+    /// straight to a local [`Inbox`](crate::Inbox) where the same endpoint would
+    /// only decrypt it again, and the reader verifies the signature regardless.
+    ///
     /// # Errors
     /// Returns an error if validation, serialization, or transport send fails.
     pub async fn send(&mut self, message: &Message) -> Result<()> {
         message.headers().validate()?;
-        let unencrypted = message.message_type == crate::service::MESSAGE_TYPE_BROADCAST
-            || (self.local && same_base_did(&message.from, &message.to)?);
+        let unencrypted =
+            self.local || message.message_type == crate::service::MESSAGE_TYPE_BROADCAST;
         let payload = if unencrypted {
             message.encode()?
         } else {
@@ -101,16 +105,10 @@ impl Outbox {
     }
 }
 
-fn same_base_did(from: &str, to: &str) -> Result<bool> {
-    let (from_base, _) = Did::parse(from)?;
-    let (to_base, _) = Did::parse(to)?;
-    Ok(from_base == to_base)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{generate_identity_from_secret, Envelope, SigningKey};
+    use crate::{generate_identity_from_secret, Did, Envelope, SigningKey};
     use std::sync::{Arc, Mutex};
 
     #[derive(Debug, Clone)]
@@ -221,7 +219,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_wire_does_not_exempt_different_base_dids() {
+    async fn local_wire_bypasses_encryption_even_for_different_base_dids() {
         let sender = generate_identity_from_secret([1; 32]).expect("sender identity");
         let recipient = generate_identity_from_secret([2; 32]).expect("recipient identity");
         let message = Message::new(
@@ -238,6 +236,6 @@ mod tests {
         outbox.send(&message).await.expect("send message");
 
         let payload = captured.lock().expect("capture lock");
-        Envelope::decode(&payload).expect("encrypted envelope");
+        assert_eq!(Message::decode(&payload).expect("raw message"), message);
     }
 }

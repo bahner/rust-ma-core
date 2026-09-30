@@ -778,18 +778,6 @@ impl Config {
         }
     }
 
-    /// Build a gateway-backed DID resolver using config TTL settings.
-    ///
-    /// Uses the built-in gateway list (localhost:8080 + public fallbacks).
-    /// Works on both native and WASM targets.
-    #[must_use]
-    pub fn ipfs_gateway_resolver(&self) -> crate::ipfs::IpfsGatewayResolver {
-        crate::ipfs::IpfsGatewayResolver::default().with_cache_ttls(
-            web_time::Duration::from_secs(self.did_resolver_positive_ttl_secs),
-            web_time::Duration::from_secs(self.did_resolver_negative_ttl_secs),
-        )
-    }
-
     /// Save this config to [`Self::config_path`] as YAML with 0600
     /// permissions. Returns an error if `config_path` is not set.
     ///

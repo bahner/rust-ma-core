@@ -186,13 +186,13 @@ Once validation passes, `IpfsDidPublisher` does the following:
    shutdown, and never delays publication.
 8. Returns `IpfsPublishDidResponse` with the `did` and `cid` fields populated.
 
-After step 3, the published DID is resolvable through any IPFS gateway.
-`IpfsGatewayResolver` (which compiles on wasm) can fetch and verify it:
+After step 3, the published DID is resolvable through Kubo RPC on the host
+running the `ma` runtime. `KuboDidResolver` can fetch and verify it:
 
 ```rust,ignore
-use ma_core::{IpfsGatewayResolver, ipfs::gateway_resolver::DidDocumentResolver};
+use ma_core::{DidDocumentResolver, KuboDidResolver};
 
-let resolver = IpfsGatewayResolver::new("https://ipfs.io")?;
+let resolver = KuboDidResolver::new("http://127.0.0.1:5001");
 let document = resolver.resolve("did:ma:k51qzi5uqu5dgutdk9yovnzvqf7h0z3lfb2tl41ixitfmw4x8p2s0l3vul4ybz").await?;
 println!("found: {}", document.id);
 ```

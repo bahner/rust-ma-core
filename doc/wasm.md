@@ -63,7 +63,8 @@ in ways that have no browser equivalent:
   instead of a file. The call site is identical; the behaviour differs.
 
 Everything else compiles and works: messaging, crypto, DID document
-construction, iroh transport, ACL, and DID resolution via the IPFS gateway.
+construction, iroh transport, and ACL. DID resolution on wasm is implemented by
+the browser host (verified-fetch in `ma-operator`), not through an HTTP gateway.
 
 ## The storage problem
 

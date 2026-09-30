@@ -10,6 +10,8 @@
 mod kubo;
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 mod pinning;
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+mod resolver;
 
 #[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
 pub use kubo::IpnsPublishOptions;
@@ -25,3 +27,5 @@ pub use pinning::{
     delete_local_pins_named_in_background, delete_remote_pins_named_in_background,
     in_flight_pin_name, remote_pin_replace_named, PinCleanupRequest, PinCleanupScheduler,
 };
+#[cfg(all(not(target_arch = "wasm32"), feature = "kubo"))]
+pub use resolver::KuboDidResolver;

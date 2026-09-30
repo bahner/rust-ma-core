@@ -1,21 +1,19 @@
-//! IPFS-relaterte APIs.
+//! IPFS-related APIs.
 //!
-//! Plattformuavhengig (lesesiden — alt fungerer på wasm og native):
-//! - `gateway` — [`GatewayPool`]: HTTP-transport, hedged failover, per-gateway cooldowns, timeouts.
-//! - `ttl_cache` — [`TtlCache`]: generisk positiv/negativ TTL-cache med in-flight-låser.
-//! - `gateway_resolver` — DID-dokument-resolusjon komponert av de to over.
-//! - `publish` — payload-bygging/validering for `/ma/ipfs/0.0.1`.
+//! Platform-independent (wasm and native):
+//! - `resolver` — [`DidDocumentResolver`] / [`IpnsPathResolver`]: the DID/IPNS
+//!   resolution contract, plus [`parse_document_bytes`]. Hosts supply the
+//!   implementation (Kubo RPC on native, verified-fetch on wasm).
+//! - `publish` — payload build/validation for `/ma/ipfs/0.0.1`.
 //!
-//! For Kubo-spesifikke operasjoner (RPC write/pin/publish), se `crate::kubo`.
+//! Publishing, pinning, key management, DID/IPNS resolution and content reads
+//! all go through `crate::kubo` (native, `kubo` feature); wasm hosts provide
+//! their own IPFS backend.
 
-pub mod gateway;
-pub mod gateway_resolver;
 pub mod publish;
-pub mod ttl_cache;
+pub mod resolver;
 
-pub use gateway::GatewayPool;
-pub use gateway_resolver::{DidDocumentResolver, IpfsGatewayResolver, IpnsPathResolver};
-pub use ttl_cache::{Cached, TtlCache};
+pub use resolver::{parse_document_bytes, DidDocumentResolver, IpnsPathResolver};
 
 // Always-available APIs for building and validating IPFS requests (wasm-safe)
 pub use publish::{

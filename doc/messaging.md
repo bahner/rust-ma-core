@@ -84,12 +84,10 @@ iroh endpoint ID in its service strings, dials the connection, and hands you
 back an outbox:
 
 ```rust,ignore
-use ma_core::{IpfsGatewayResolver, service::INBOX_PROTOCOL_ID};
-use ma_core::ipfs::gateway_resolver::DidDocumentResolver;
+use ma_core::{DidDocumentResolver, KuboDidResolver, service::INBOX_PROTOCOL_ID};
 
-// Use default (localhost:8080 + public gateways), or config.ipfs_gateway_resolver()
-// when a Config is available.
-let resolver = IpfsGatewayResolver::default();
+// Native runtimes resolve DIDs through Kubo RPC (default http://127.0.0.1:5001).
+let resolver = KuboDidResolver::new("http://127.0.0.1:5001");
 let mut outbox = endpoint.outbox(&resolver, "did:ma:k51qzi5uqu5d…", INBOX_PROTOCOL_ID).await?;
 ```
 
