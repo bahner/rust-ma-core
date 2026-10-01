@@ -339,23 +339,22 @@ pub async fn dag_get<T: DeserializeOwned>(kubo_url: &str, cid: &str) -> Result<T
         .timeout(Duration::from_secs(10))
         .build()?;
 
-    let body = client
+    // Request DAG-CBOR output — never Kubo's `dag-json` default. DID documents
+    // carry IPLD links (e.g. `ma.runtime`). Decoding DAG-JSON through
+    // `serde_json` turns a link `{"/":"<cid>"}` into a plain map, so
+    // re-encoding changes the payload hash and document signature verification
+    // fails. DAG-CBOR preserves links round-trip exactly.
+    let bytes = client
         .post(url)
-        .query(&[("arg", cid)])
+        .query(&[("arg", cid), ("output-codec", "dag-cbor")])
         .send()
         .await?
         .error_for_status()?
-        .text()
+        .bytes()
         .await?;
 
-    serde_json::from_str::<T>(&body).map_err(|e| {
-        anyhow!(
-            "failed parsing dag/get response for {}: {} body={}",
-            cid,
-            e,
-            body
-        )
-    })
+    serde_ipld_dagcbor::from_slice::<T>(&bytes)
+        .map_err(|e| anyhow!("failed parsing dag/get response for {}: {}", cid, e))
 }
 
 // ─── Name publish / resolve ─────────────────────────────────────────────────
@@ -1045,6 +1044,78 @@ mod tests {
             .to_ascii_lowercase()
             .contains("content-type: multipart/form-data;"));
         assert!(request.windows(document.len()).any(|part| part == document));
+    }
+
+    #[tokio::test]
+    async fn dag_get_round_trips_ipld_links_for_document_verification() {
+        use crate::doc::MaExtension;
+        use ipld_core::ipld::Ipld;
+
+        // A signed DID document whose `ma` extension carries a real IPLD link,
+        // exactly like a runtime's `ma.runtime` root-CID link.
+        let identity = crate::generate_identity_from_secret([71u8; 32]).expect("identity");
+        let sign_did =
+            crate::Did::new_url(&identity.subject_url.ipns, None::<String>).expect("sign did");
+        let signing_key = crate::SigningKey::from_private_key_bytes(
+            sign_did,
+            hex::decode(&identity.signing_private_key_hex)
+                .expect("key hex")
+                .try_into()
+                .expect("32-byte key"),
+        )
+        .expect("signing key");
+        let runtime_cid =
+            cid::Cid::try_from("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi")
+                .expect("runtime cid");
+
+        let mut document = identity.document.clone();
+        document.set_ma_extension(
+            MaExtension::new()
+                .kind("runtime")
+                .extra("runtime", Ipld::Link(runtime_cid)),
+        );
+        let assertion_id = document.assertion_method[0].clone();
+        let vm = document
+            .get_verification_method_by_id(&assertion_id)
+            .expect("verification method")
+            .clone();
+        document.sign(&signing_key, &vm).expect("sign document");
+        document.verify().expect("document verifies before publish");
+
+        let encoded = document.encode().expect("encode dag-cbor");
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind Kubo mock");
+        let address = listener.local_addr().expect("mock address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept Kubo request");
+            let request = read_http_request(&mut stream);
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/vnd.ipld.dag-cbor\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                encoded.len()
+            )
+            .into_bytes();
+            response.extend_from_slice(&encoded);
+            stream.write_all(&response).expect("write Kubo response");
+            request
+        });
+
+        let decoded: Document = dag_get(&format!("http://{address}"), "bafy-document")
+            .await
+            .expect("Kubo dag get");
+
+        let request = server.join().expect("Kubo mock thread");
+        let request_text = String::from_utf8_lossy(&request);
+        assert!(
+            request_text.starts_with(
+                "POST /api/v0/dag/get?arg=bafy-document&output-codec=dag-cbor HTTP/1.1"
+            ),
+            "unexpected request: {request_text}"
+        );
+
+        assert_eq!(decoded.ma, document.ma);
+        decoded
+            .verify()
+            .expect("signature must survive the dag-cbor round trip");
     }
 
     #[tokio::test]
