@@ -7,10 +7,14 @@ both native and `wasm32-unknown-unknown`. No binary is produced here.
 
 ## Agent rules
 
-- **Never modify files in this repo without explicit user approval.**
+- **When working inside this repo, edit freely** — especially when the user
+  has asked you to fix a build error, test failure, or bug. No extra approval
+  is needed for changes scoped to `ma-core`.
+- **When working in another repo, do not change `ma-core` unasked.**
   `ma-core` is a shared dependency used by multiple downstream crates
-  (`ma-runtime`, `ma-agent`, etc.). Unannounced changes here break all
-  consumers silently. Always ask before editing any file here.
+  (`ma-runtime`, `ma-agent`, etc.). Unannounced changes made while fixing
+  something elsewhere break all consumers silently. If a fix requires a
+  `ma-core` change, explain why and ask the user first.
 - Write DRY, KISS code: avoid duplicated logic and prefer the simplest
   implementation that meets the requirement.
 
