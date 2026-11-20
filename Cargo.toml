@@ -2,7 +2,7 @@
 name = "ma-core"
 version = "0.16.1"
 edition = "2021"
-rust-version = "1.95"
+rust-version = "1.99"
 description = "DIDComm service library: inboxes, outboxes, DID document publishing, and transport abstraction"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/bahner/ma-core"
@@ -31,7 +31,7 @@ argon2 = { version = "0.6", optional = true }
 async-trait = "0.1"
 base64 = "0.23"
 blake3 = "1"
-bytes = "1.12.1"
+bytes = "1.12.2"
 chacha20poly1305 = "0.11"
 cid = { version = "0.11.3", features = ["serde"] }
 ciborium = "0.2"
@@ -41,7 +41,7 @@ ed25519-dalek = { version = "3.0", features = ["rand_core"] }
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 hex = "0.4"
 ipld-core = { version = "0.4", features = ["serde"] }
-iroh = { version = "^1.4", default-features = false, features = ["tls-ring"], optional = true }
+iroh = { version = "^1.5", default-features = false, features = ["tls-ring"], optional = true }
 iroh-base = "^1"
 libp2p-identity = { version = "0.3", features = ["ed25519", "peerid"] }
 multibase = "0.9"
