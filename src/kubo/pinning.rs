@@ -423,6 +423,6 @@ mod tests {
     fn stale_pins_returns_empty_when_only_current_remains() {
         let stale = stale_pins(vec!["current".to_string()], "current");
 
-        assert!(stale.is_empty());
+        assert_eq!(stale, Vec::<String>::new());
     }
 }

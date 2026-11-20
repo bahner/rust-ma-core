@@ -113,12 +113,17 @@ Loading an ACL from a file and checking a capability looks like this:
 
 ```rust,ignore
 use ma_core::{AclMap, check_cap, CAP_RPC, CAP_IPFS};
+use noyalib::compat::serde_yaml;
+
+#[derive(serde::Deserialize)]
+struct AclFile {
+    acl: AclMap,
+}
 
 fn load_acl(path: &str) -> anyhow::Result<AclMap> {
     let yaml = std::fs::read_to_string(path)?;
-    let value: serde_yaml::Value = serde_yaml::from_str(&yaml)?;
-    let acl: AclMap = serde_yaml::from_value(value["acl"].clone())?;
-    Ok(acl)
+    let file: AclFile = serde_yaml::from_str(&yaml)?;
+    Ok(file.acl)
 }
 
 fn handle_incoming(acl: &AclMap, sender_did: &str, is_rpc: bool) -> anyhow::Result<()> {

@@ -1,0 +1,17 @@
+# RUSTSEC-2026-0543: chrono is unmaintained.
+#
+# chrono is not a direct dependency of ma-core. It is pulled in on Windows
+# targets only:
+#
+#   ma-core -> iroh -> netwatch -> wmi -> chrono
+#
+# `netwatch` 0.20.2 (current release) depends on `wmi` 0.18 with default
+# features, and `wmi`'s default feature set enables `chrono` for Win32
+# datetime conversion. ma-core cannot disable that feature (Cargo features
+# are additive) or swap `wmi` for a `time`/`jiff`-based crate from here.
+# ma-core itself uses `time` and `web-time` for all time handling.
+#
+# Remove this ignore once netwatch (or iroh) stops enabling wmi's `chrono`
+# feature.
+[advisories]
+ignore = ["RUSTSEC-2026-0543"]

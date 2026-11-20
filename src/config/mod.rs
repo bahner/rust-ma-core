@@ -53,6 +53,7 @@ use std::path::{Path, PathBuf};
 use crate::error::{Error, Result};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
+use noyalib::compat::serde_yaml;
 use serde::{Deserialize, Serialize};
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -297,7 +298,7 @@ fn load_yaml_mapping(path: &Path) -> Result<serde_yaml::Mapping> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn yaml_get<'a>(m: &'a serde_yaml::Mapping, key: &str) -> Option<&'a serde_yaml::Value> {
-    m.get(serde_yaml::Value::String(key.to_string()))
+    m.get(key)
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -372,31 +373,28 @@ impl Config {
         };
 
         let take_str = |map: &mut serde_yaml::Mapping, key: &str| {
-            map.remove(serde_yaml::Value::String(key.to_string()))
+            map.remove(key)
                 .and_then(|v| v.as_str().map(ToOwned::to_owned))
         };
 
         let take_path = |map: &mut serde_yaml::Mapping, key: &str| {
-            map.remove(serde_yaml::Value::String(key.to_string()))
-                .and_then(|v| v.as_str().map(PathBuf::from))
+            map.remove(key).and_then(|v| v.as_str().map(PathBuf::from))
         };
 
         let take_u64 = |map: &mut serde_yaml::Mapping, key: &str| {
-            map.remove(serde_yaml::Value::String(key.to_string()))
-                .and_then(|v| match v {
-                    serde_yaml::Value::Number(n) => n.as_u64(),
-                    serde_yaml::Value::String(s) => s.parse::<u64>().ok(),
-                    _ => None,
-                })
+            map.remove(key).and_then(|v| match v {
+                serde_yaml::Value::Number(n) => n.as_u64(),
+                serde_yaml::Value::String(s) => s.parse::<u64>().ok(),
+                _ => None,
+            })
         };
 
         let take_bool = |map: &mut serde_yaml::Mapping, key: &str| {
-            map.remove(serde_yaml::Value::String(key.to_string()))
-                .and_then(|v| match v {
-                    serde_yaml::Value::Bool(b) => Some(b),
-                    serde_yaml::Value::String(s) => s.parse::<bool>().ok(),
-                    _ => None,
-                })
+            map.remove(key).and_then(|v| match v {
+                serde_yaml::Value::Bool(b) => Some(b),
+                serde_yaml::Value::String(s) => s.parse::<bool>().ok(),
+                _ => None,
+            })
         };
 
         let slug = take_str(&mut m, "slug").unwrap_or_else(|| "ma".to_string());
@@ -445,7 +443,7 @@ impl Config {
         let mut m = self.extra.clone();
 
         let mut set = |k: &str, v: serde_yaml::Value| {
-            m.insert(serde_yaml::Value::String(k.to_string()), v);
+            m.insert(k, v);
         };
 
         set("slug", serde_yaml::Value::String(self.slug.clone()));
@@ -699,7 +697,7 @@ impl Config {
         let extra = yaml
             .map(|mut m| {
                 for k in known {
-                    m.remove(serde_yaml::Value::String((*k).to_string()));
+                    m.remove(k);
                 }
                 m
             })

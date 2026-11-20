@@ -244,7 +244,7 @@ mod tests {
     fn new_url_none_generates_nanoid() {
         let url = Did::new_url(IDENTIFIER, None::<String>).unwrap();
         assert!(url.is_url());
-        assert!(!url.fragment.unwrap().is_empty());
+        assert_ne!(url.fragment.unwrap(), "");
     }
 
     #[test]

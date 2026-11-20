@@ -352,6 +352,7 @@ pub fn normalize_principal(did: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use noyalib::compat::serde_yaml;
 
     fn allow(caps: &[&str]) -> CapabilityEntry {
         CapabilityEntry::from_caps(caps.iter().copied())
